@@ -1,47 +1,37 @@
-# Ejemplo de ambiente productivo
-### MLOps1 - CEIA - FIUBA
-Estructura de servicios para la implementación del proyecto final de MLOps1 - CEIA - FIUBA
+# billboard-detector-mlops
 
-Supongamos que trabajamos para **ML Models and something more Inc.**, la cual ofrece un servicio que proporciona modelos mediante una REST API. Internamente, tanto para realizar tareas de DataOps como de MLOps, la empresa cuenta con varios servicios que ayudan a ejecutar las acciones necesarias. También dispone de un Data Lake en S3, para este caso, simularemos un S3 utilizando MinIO.
+**VallaVision**: detector de vallas publicitarias en imágenes de calle, puesto en producción.
+TP integrador de *Operaciones de Aprendizaje Automático II* (CEIA · FIUBA). Autor: Christian Conchari.
 
-Para simular esta empresa, utilizaremos Docker y, a través de Docker Compose, desplegaremos varios contenedores que representan distintos servicios en un entorno productivo.
+El foco es la **puesta en producción**, no el modelado: el detector (ViT en PyTorch) entra como
+artefacto ya entrenado; mientras tanto se usa `facebook/detr-resnet-50` como sustituto con el mismo contrato.
 
-Los servicios que contamos son:
-- [Apache Airflow](https://airflow.apache.org/)
-- [MLflow](https://mlflow.org/)
-- API Rest para servir modelos ([FastAPI](https://fastapi.tiangolo.com/))
-- [MinIO](https://min.io/)
-- Base de datos relacional [PostgreSQL](https://www.postgresql.org/)
-- Base de dato key-value [ValKey](https://valkey.io/) 
+- [docs/alcance.md](docs/alcance.md): alcance, arquitectura, decisiones, riesgos e hitos
+- [docs/contrato.md](docs/contrato.md): contrato de entrada/salida, layout del Data Lake y DAGs
 
-![Diagrama de servicios](final_assign.png)
+## Servicios
 
-Por defecto, cuando se inician los multi-contenedores, se crean los siguientes buckets:
+Base: [facundolucianna/amq2-service-ml](https://github.com/facundolucianna/amq2-service-ml) (remoto `upstream`).
 
-- `s3://data`
-- `s3://mlflow` (usada por MLflow para guardar los artefactos).
+| Servicio | URL |
+|---|---|
+| Airflow | http://localhost:8080 (airflow / airflow) |
+| MLflow | http://localhost:5001 |
+| MinIO | http://localhost:9001 (minio / minio123) |
+| API de detección | http://localhost:8800/docs |
 
-y las siguientes bases de datos:
+Buckets: `data` (Data Lake por zonas, ver contrato §4) y `mlflow` (artefactos de MLflow).
 
-- `mlflow_db` (usada por MLflow).
-- `airflow` (usada por Airflow).
+## Estado
 
-## Tarea a realizar
-
-La tarea es implementar el modelo que desarrollaron en Aprendizaje de Máquina en este ambiente productivo. Para ello, pueden usar y crear los buckets y bases de datos que necesiten. Lo mínimo que deben realizar es:
-
-- Un DAG en Apache Airflow. Puede ser cualquier tarea que se desee realizar, como entrenar el modelo, un proceso ETL, etc.
-- Un experimento en MLflow de búsqueda de hiperparámetros.
-- Servir el modelo implementado en AMq1 en el servicio de RESTAPI.
-- Documentar (comentarios y docstring en scripts, notebooks, y asegurar que la documentación de FastAPI esté de acuerdo al modelo).
-
-Desde **ML Models and something more Inc.** autorizan a extender los requisitos mínimos. También pueden utilizar nuevos servicios (por ejemplo, una base de datos no relacional, otro orquestador como MetaFlow, un servicio de API mediante NodeJs, etc.).
-
-### Ejemplo 
-
-El [branch `example_implementation`](https://github.com/facundolucianna/amq2-service-ml/tree/example_implementation) contiene un ejemplo de aplicación para guiarse. Se trata de una implementación de un modelo de clasificación utilizando los datos de [Heart Disease](https://archive.ics.uci.edu/dataset/45/heart+disease).
-
-Además se cuenta con una implementación ejemplo de predicción en bache con una parte que funciona gran parte de local en [branch `batch-example`](https://github.com/facundolucianna/amq2-service-ml/tree/example_implementation)
+| Paso | Estado |
+|---|---|
+| Stack base (Airflow, MLflow, MinIO, Postgres, FastAPI) levanta healthy | ✅ |
+| Contrato de entrada/salida y layout del Data Lake | ✅ borrador |
+| DAG `registrar_modelo` (DETR → MinIO → MLflow `champion`) | ⏳ |
+| REST `POST /v1/detect` | ⏳ |
+| gRPC `Detect` / `DetectStream` | ⏳ |
+| Streaming + drift, DAG `monitoreo_drift` | ⏳ |
 
 ## Instalación
 

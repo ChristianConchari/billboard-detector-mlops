@@ -1,0 +1,93 @@
+# Contrato del servicio de detección
+
+Define la forma de entrada/salida del detector **una sola vez**, para que REST, gRPC,
+streaming y los resultados en MinIO hablen el mismo idioma. El modelo detrás puede
+cambiar (sustituto DETR → ViT propio) sin romper a ningún consumidor.
+
+## 1. Modelo
+
+| Campo | Valor |
+|---|---|
+| Nombre en MLflow Registry | `billboard-detector` |
+| Modelo sustituto (v1) | `facebook/detr-resnet-50` (PyTorch, COCO, 91 clases) |
+| Modelo final | ViT de detección de la otra materia, mismo contrato |
+| Promoción | alias `champion` (modelo servido) y `challenger` (candidato) |
+
+> MLflow 3 depreca las *stages* (`Staging`/`Production`); se usan **aliases**.
+> `champion` cumple el rol de "Production" del documento de alcance.
+
+**Etiquetas.** El contrato no fija la lista de clases: `label` es un `string` y el set
+válido lo publica el modelo en su metadata (`GET /v1/model`). DETR-COCO **no tiene clase
+`billboard`**; durante la fase sustituta se mapea la clase más cercana
+(`street sign`) a `billboard` y se documenta como limitación.
+
+## 2. REST
+
+### `POST /v1/detect`
+
+Entrada: `multipart/form-data`
+
+| Campo | Tipo | Regla |
+|---|---|---|
+| `image` | archivo | `image/jpeg` o `image/png`, ≤ 5 MB, lado mayor ≤ 4096 px |
+| `score_threshold` | float (query, opcional) | `0.0–1.0`, por defecto `0.7` |
+
+Salida `200`:
+
+```json
+{
+  "request_id": "6f1c…",
+  "model": { "name": "billboard-detector", "version": "1", "alias": "champion" },
+  "image": { "width": 1280, "height": 720 },
+  "detections": [
+    { "label": "billboard", "score": 0.93, "box": [412.0, 88.5, 790.2, 301.7] }
+  ],
+  "latency_ms": 412.3
+}
+```
+
+- `box` = `[x_min, y_min, x_max, y_max]` en **píxeles absolutos** de la imagen original.
+- `detections` ordenadas por `score` descendente; vacía si nada supera el umbral.
+
+Errores:
+
+| Código | Cuándo |
+|---|---|
+| `415` | tipo de archivo no soportado |
+| `413` | imagen > 5 MB |
+| `422` | imagen ilegible, dimensiones fuera de rango o `score_threshold` inválido |
+| `503` | no hay modelo `champion` cargado |
+
+### `GET /v1/model`
+Nombre, versión, alias, clases y métricas de evaluación del modelo cargado.
+
+### `GET /health`
+`200 {"status": "ok", "model_loaded": true}` · `503` si el modelo no está cargado.
+
+## 3. gRPC (Sesión 3)
+
+Mismos campos: la imagen viaja como `bytes` (sin base64). `Detect` (unary) y
+`DetectStream` (server-streaming sobre un lote de frames). El `.proto` se deriva de
+este documento.
+
+## 4. Data Lake (MinIO)
+
+Bucket `data`, organizado por zonas:
+
+```
+s3://data/
+  raw/images/<dataset>/<split>/…            imágenes originales (train/val/test)
+  raw/stream/date=YYYY-MM-DD/…              frames que llegan por streaming
+  curated/eval/<dataset>/annotations.json   set de validación anotado (COCO)
+  models/billboard-detector/v<N>/…          pesos + metadata versionados
+  predictions/date=YYYY-MM-DD/<request_id>.json   salida de cada inferencia (formato §2)
+```
+
+Bucket `mlflow`: artefactos de MLflow (lo gestiona MLflow, no se escribe a mano).
+
+## 5. DAGs (Airflow)
+
+| DAG | Qué hace |
+|---|---|
+| `registrar_modelo` | descarga pesos → `models/…/v<N>/` → evalúa sobre `curated/eval` (mAP) → registra en MLflow → alias `champion` si supera el umbral y al campeón actual |
+| `monitoreo_drift` | lee `predictions/` recientes → compara contra la referencia (score medio, detecciones por frame, brillo/contraste) → reporte o alerta |
