@@ -92,10 +92,10 @@ Bucket `data`, organizado por zonas:
 s3://data/
   raw/images/<dataset>/<split>/…            imágenes originales (train/val/test)
   raw/stream/date=YYYY-MM-DD/…              frames que llegan por streaming
-  curated/eval/<dataset>/annotations.json   set de validación anotado (COCO)
+  curated/eval/<dataset>/annotations.json   set de validación revisado (COCO, copia de annotations/reviewed/val.json)
   models/billboard-detector/v<N>/…          pesos + metadata versionados
   predictions/date=YYYY-MM-DD/<request_id>.json   salida de cada inferencia (formato §2 + `image_stats`)
-  curated/reference/billboard-detector/v<N>.json  features de `val` por versión (referencia de drift)
+  curated/reference/billboard-detector/v<N>.json  features del set de evaluación por versión (referencia de drift)
   monitoring/drift/<timestamp>.json               reportes de `monitoreo_drift`
 ```
 

@@ -57,6 +57,8 @@ x-airflow-common: &airflow-common
     - ${AIRFLOW_PROJ_DIR:-./airflow}/secrets:/opt/secrets
     # Dataset local que sube el DAG registrar_modelo a MinIO
     - ./data:/opt/airflow/data:ro
+    # Set de evaluación revisado (versionado), ver annotations/reviewed/README.md
+    - ./annotations:/opt/airflow/annotations:ro
     # Paquete compartido con la API (detector y servicio)
     - ./vallavision:/opt/airflow/dags/vallavision:ro
   networks:

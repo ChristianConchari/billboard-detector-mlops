@@ -49,10 +49,9 @@ revisión se guarda en el volumen `label_studio_data`, así que se puede exporta
 
 ## Uso rápido
 
+Con el stack levantado y el modelo registrado (ver [Instalación](#instalación)):
+
 ```bash
-docker compose --profile all up -d --build
-# Airflow → DAG registrar_modelo → Trigger: baja model-v1 del release (verifica SHA-256),
-# lo sube a MinIO, evalúa mAP sobre val, lo registra en MLflow y lo promueve a `champion`
 curl -F image=@data/billboards-2025-09-14-sur-lp/images/<imagen>.jpg http://localhost:8800/v1/detect
 ```
 
@@ -73,7 +72,7 @@ Streaming simulado y drift: `scripts/stream_client.py` reproduce una carpeta de 
 (un `Detect` por frame) y reporta por ventana throughput, latencia p50/p95 y detecciones por frame; con
 `--reference` también compara contra la referencia (KS) y `--degrade oscurecer` provoca drift para la demo.
 El DAG `monitoreo_drift` (horario) hace la misma comparación sobre `predictions/` y falla si hay drift;
-la referencia la genera `registrar_modelo` sobre `val` en `curated/reference/`.
+la referencia la genera `registrar_modelo` sobre el set de evaluación en `curated/reference/`.
 
 ```bash
 uv run --with grpcio --with pillow --with numpy --with scipy --with boto3 scripts/stream_client.py \
@@ -88,6 +87,7 @@ Tests de la API y de drift: `pytest tests` (usan un detector falso, no hace falt
 |---|---|
 | `vallavision/` | Paquete compartido: `detector.py` (RT-DETR + pyfunc de MLflow), `service.py` (carga del champion, validación, persistencia), `grpc_server.py` |
 | `vallavision/drift.py` | Features por frame, referencia y test KS |
+| `annotations/reviewed/val.json` | Set de evaluación con cajas revisadas (el `val` del entrenamiento del modelo) |
 | `airflow/dags/registrar_modelo.py` | DAG de registro y promoción del modelo (genera también la referencia de drift) |
 | `airflow/dags/monitoreo_drift.py` | DAG horario: `predictions/` vs referencia → reporte en `monitoring/drift/` |
 | `scripts/stream_client.py` | Cámara simulada + métricas por ventana por gRPC |
@@ -99,125 +99,75 @@ Tests de la API y de drift: `pytest tests` (usan un detector falso, no hace falt
 
 | Paso | Estado |
 |---|---|
-| Stack base (Airflow, MLflow, MinIO, Postgres, FastAPI) levanta healthy | ✅ |
-| Contrato de entrada/salida y layout del Data Lake | ✅ borrador |
-| DAG `registrar_modelo` (RT-DETR → MinIO → MLflow → referencia de drift) | ✅ corre de punta a punta; ⚠️ la promoción a `champion` está bloqueada por el mAP (ver abajo) |
+| Stack base (Airflow, MLflow, MinIO, Postgres, FastAPI) levanta healthy | ✅ probado desde cero siguiendo esta guía |
+| Contrato de entrada/salida y layout del Data Lake | ✅ |
+| DAG `registrar_modelo` (RT-DETR → MinIO → mAP → MLflow → `champion`, referencia de drift) | ✅ promueve solo: mAP 0.817 / AP50 0.931 sobre el `val` revisado (`min_map` 0.5) |
 | REST `/v1/detect`, `/v1/model`, `/health` | ✅ probado con el RT-DETR real |
 | gRPC `Detect` / `DetectStream` + benchmark vs REST | ✅ probado, con tests |
 | Gateway REST (245 MB) + servicio de inferencia separados | ✅ RAM −55 % (647 vs 1448 MiB), mismo resultado que antes, 40 tests |
 | Escalado de `inference` con `--scale` | ⏳ sin demostrar: re-medir con `max_connection_age` (ver `docs/estado-y-pendientes.md`) |
 | Streaming + drift (`stream_client.py`), DAG `monitoreo_drift` | ✅ sin drift con tráfico normal; con `--degrade oscurecer` marca brillo y contraste |
 
-### ⚠️ mAP de `registrar_modelo` no comparable con el del release
+### Evaluación del modelo
 
-Sobre `val` de este dataset el DAG mide **mAP 0.066 / AP50 0.24**, contra 0.817 (val) y 0.649 (test) del
-release. La inferencia es la misma que la del repo del modelo y las detecciones se ven bien, así que no es un
-fallo de carga. La diferencia está en la evaluación: (1) el split por video de este dataset no coincide con el
-del entrenamiento (2 de sus 4 videos de `val` eran de train del modelo) y (2) 102 de las 169 cajas de `val` son
-pre-etiquetas `pending`, mientras que el modelo se evaluó con cajas revisadas a mano. Mientras no se evalúe
-con anotaciones revisadas, `min_map` (0.5) deja al modelo como `challenger`; para probar el serving se fijó
-`champion` a mano con `set_registered_model_alias`.
+`registrar_modelo` evalúa sobre [`annotations/reviewed/val.json`](annotations/reviewed/README.md): el `val` con cajas
+revisadas a mano con el que se entrenó y calibró `model-v1` (95 imágenes, 130 cajas). Mide **mAP 0.817 / AP50 0.931**,
+el mismo valor que reporta el release para val, así que la carga y la inferencia del servicio reproducen las del repo del modelo.
+
+No se usa el `val` del export de origen: su split por video no coincide con el del entrenamiento (138 de sus 169
+imágenes eran de `train` del modelo) y 102 de sus 169 cajas son pre-etiquetas `pending`. Con ese set el DAG medía mAP 0.066.
 
 ## Instalación
 
-1. Para poder levantar todos los servicios, primero instala [Docker](https://docs.docker.com/engine/install/) en tu computadora (o en el servidor que desees usar).
-2. Clona este repositorio.
-3. Si estás en Linux o MacOS, en el archivo `.env`, reemplaza `AIRFLOW_UID` por el de tu usuario o alguno que consideres oportuno (para encontrar el UID, usa el comando `id -u <username>`). De lo contrario, Airflow dejará sus carpetas internas como root y no podrás subir DAGs (en `airflow/dags`) o plugins, etc.
-4. En la carpeta raíz de este repositorio, ejecuta:
+### Requisitos
+
+- Docker con Compose v2.
+- ~8 GB de RAM libres: el stack usa ~4.7 GB en reposo y el worker de Airflow carga el modelo durante el DAG.
+- ~12 GB de disco para las imágenes (Airflow 4.8 GB, MLflow 2.3 GB, inferencia 2.3 GB) y bastante más durante el primer build.
+- El zip del dataset `billboards-2025-09-14-sur-lp` (no se versiona en git).
+
+### Pasos
 
 ```bash
-docker compose --profile all up
+git clone https://github.com/ChristianConchari/billboard-detector-mlops.git && cd billboard-detector-mlops
+
+# 1. Dataset: queda como data/billboards-2025-09-14-sur-lp/{annotations,images,manifest.json}
+mkdir -p data && unzip <ruta>/billboards-2025-09-14-sur-lp-*.zip -d data
+
+# 2. En Linux/macOS, AIRFLOW_UID en .env tiene que ser tu UID (id -u); si no, Airflow deja sus carpetas como root
+sed -i "s/^AIRFLOW_UID=.*/AIRFLOW_UID=$(id -u)/" .env
+
+# 3. Levantar todo (~10 min la primera vez, por torch)
+docker compose --profile all up -d --build
+docker compose --profile all ps   # todo healthy; airflow-init y minio_create_bucket terminan con Exited (0)
+
+# 4. Registrar el modelo (~6 min en CPU): baja model-v1 del release (verifica SHA-256), lo sube a MinIO,
+#    evalúa el mAP, lo registra en MLflow y, si mAP >= 0.5, lo promueve a champion
+docker exec airflow-apiserver airflow dags unpause registrar_modelo
+docker exec airflow-apiserver airflow dags trigger registrar_modelo
+
+# 5. Comprobar (el gateway busca el champion cada 30 s; POST /v1/reload lo fuerza)
+curl -s localhost:8800/health    # {"status":"ok","model_loaded":true}
+curl -F image=@data/billboards-2025-09-14-sur-lp/images/<imagen>.jpg localhost:8800/v1/detect
 ```
 
-5. Una vez que todos los servicios estén funcionando (verifica con el comando `docker ps -a` que todos los servicios estén healthy o revisa en Docker Desktop), podrás acceder a los diferentes servicios mediante:
-   - Apache Airflow: http://localhost:8080
-   - MLflow: http://localhost:5001
-   - MinIO: http://localhost:9001 (ventana de administración de Buckets)
-   - API: http://localhost:8800/
-   - Documentación de la API: http://localhost:8800/docs
+Si el build falla con `ReadTimeoutError` de `files.pythonhosted.org`, es la red saturada por bajar todas las
+imágenes en paralelo: construir primero la de inferencia (`docker compose --profile all build inference`) y volver a correr el paso 3.
 
-Si estás usando un servidor externo a tu computadora de trabajo, reemplaza `localhost` por su IP (puede ser una privada si tu servidor está en tu LAN o una IP pública si no; revisa firewalls u otras reglas que eviten las conexiones).
+Puertos y credenciales están en `.env` (son de desarrollo). Si el stack corre en otra máquina, reemplazar `localhost` por su IP.
 
-Todos los puertos u otras configuraciones se pueden modificar en el archivo `.env`. Se invita a jugar y romper para aprender; siempre puedes volver a clonar este repositorio.
-
-## Apagar los servicios
-
-Estos servicios ocupan cierta cantidad de memoria RAM y procesamiento, por lo que cuando no se están utilizando, se recomienda detenerlos. Para hacerlo, ejecuta el siguiente comando:
+### Apagar
 
 ```bash
-docker compose --profile all down
+docker compose --profile all down        # detiene los servicios
+docker compose --profile all down -v     # además borra volúmenes: MinIO, MLflow y Postgres (champion, predicciones, referencia)
 ```
 
-Si deseas no solo detenerlos, sino también eliminar toda la infraestructura (liberando espacio en disco), utiliza el siguiente comando:
+## Operación
 
-```bash
-docker compose down --rmi all --volumes
-```
-
-Nota: Si haces esto, perderás todo en los buckets y bases de datos.
-
-## Aspectos específicos de Airflow
-
-### Variables de entorno
-Airflow ofrece una amplia gama de opciones de configuración. En el archivo `docker-compose.yaml`, dentro de `x-airflow-common`, se encuentran variables de entorno que pueden modificarse para ajustar la configuración de Airflow. Pueden añadirse [otras variables](https://airflow.apache.org/docs/apache-airflow/stable/configurations-ref.html).
-
-### Uso de ejecutores externos
-Actualmente, para este caso, Airflow utiliza un ejecutor [celery](https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/executor/celery.html), lo que significa que las tareas se ejecutan en otro contenedor. 
-
-### Uso de la CLI de Airflow
-
-Si necesitan depurar Apache Airflow, pueden utilizar la CLI de Apache Airflow de la siguiente manera:
-
-```bash
-docker compose --profile all --profile debug up
-```
-
-Una vez que el contenedor esté en funcionamiento, pueden utilizar la CLI de Airflow de la siguiente manera, 
-por ejemplo, para ver la configuración:
-
-```bash
-docker-compose run airflow-cli config list      
-```
-
-Para obtener más información sobre el comando, pueden consultar [aqui](https://airflow.apache.org/docs/apache-airflow/stable/cli-and-env-variables-ref.html).
-
-### Variables y Conexiones
-
-Si desean agregar variables para accederlas en los DAGs, pueden hacerlo en `secrets/variables.yaml`. Para obtener más [información](https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/variables.html), 
-consulten la documentación.
-
-Si desean agregar conexiones en Airflow, pueden hacerlo en `secrets/connections.yaml`. También es posible agregarlas mediante la interfaz de usuario (UI), pero estas no persistirán si se borra todo. Por otro lado, cualquier conexión guardada en `secrets/connections.yaml` no aparecerá en la UI, aunque eso no significa que no exista. Consulten la documentación para obtener más 
-[información](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/connections.html).
-
-## Conexión con los buckets
-
-Dado que no estamos utilizando Amazon S3, sino una implementación local de los mismos mediante MinIO, es necesario modificar las variables de entorno para conectar con el servicio de MinIO. Las variables de entorno son las siguientes:
-
-```bash
-AWS_ACCESS_KEY_ID=minio   
-AWS_SECRET_ACCESS_KEY=minio123 
-AWS_ENDPOINT_URL_S3=http://localhost:90000
-```
-
-MLflow también tiene una variable de entorno que afecta su conexión a los buckets:
-
-```bash
-MLFLOW_S3_ENDPOINT_URL=http://localhost:9000
-```
-Asegúrate de establecer estas variables de entorno antes de ejecutar tu notebook o scripts en tu máquina o en cualquier otro lugar. Si estás utilizando un servidor externo a tu computadora de trabajo, reemplaza localhost por su dirección IP.
-
-Al hacer esto, podrás utilizar `boto3`, `awswrangler`, etc., en Python con estos buckets, o `awscli` en la consola.
-
-Si tienes acceso a AWS S3, ten mucho cuidado de no reemplazar tus credenciales de AWS. Si usas las variables de entorno, no tendrás problemas.
-
-## Valkey
-
-La base de datos Valkey es usada por Apache Airflow para su funcionamiento. Tal como está configurado ahora no esta expuesto el puerto para poder ser usado externamente. Se puede modificar el archivo `docker-compose.yaml` para habilitaro.
-
-## Pull Request
-
-Este repositorio está abierto para que realicen sus propios Pull Requests y así contribuir a mejorarlo. Si desean realizar alguna modificación, **¡son bienvenidos!** También se pueden crear nuevos entornos productivos para aumentar la variedad de implementaciones, idealmente en diferentes `branches`. Algunas ideas que se me ocurren que podrían implementar son:
-
-- Reemplazar Airflow y MLflow con [Metaflow](https://metaflow.org/) o [Kubeflow](https://www.kubeflow.org).
-- Reemplazar MLflow con [Seldon-Core](https://github.com/SeldonIO/seldon-core).
-- Agregar un servicio de tableros como, por ejemplo, [Grafana](https://grafana.com).
+- **Airflow CLI:** `docker exec airflow-apiserver airflow <comando>` (por ejemplo `airflow dags list-import-errors`).
+  Variables y conexiones persistentes en `airflow/secrets/{variables,connections}.yaml`.
+- **MinIO desde scripts locales:** exportar `AWS_ACCESS_KEY_ID=minio`, `AWS_SECRET_ACCESS_KEY=minio123`,
+  `AWS_ENDPOINT_URL_S3=http://localhost:9000` y, para MLflow, `MLFLOW_S3_ENDPOINT_URL=http://localhost:9000`.
+- **Diagnóstico:** un `503` del gateway puede ser "sin champion" o "falló la carga"; mirar
+  `docker logs billboard-detector-mlops-inference-1`. Más trampas conocidas en `docs/estado-y-pendientes.md`.

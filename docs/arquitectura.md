@@ -39,14 +39,16 @@ flowchart LR
 | Umbral por defecto | El calibrado sobre validación (`calibration.json`, 0.15), no un valor fijo | Viaja con el checkpoint y es el que maximiza F1 |
 | Fuente de pesos | `gh://owner/repo@tag/asset.zip` con verificación SHA-256 | Reproducible sin pasos manuales ni credenciales |
 | Idempotencia | Mismos pesos (sha256) → misma `v<N>` y misma versión de MLflow | Re-ejecutar el DAG no duplica nada |
-| Drift | Test KS de dos muestras por feature (α = 0,01) contra `val` | Sin supuestos de distribución y sin entrenar nada |
+| Drift | Test KS de dos muestras por feature (α = 0,01) contra el `val` revisado | Sin supuestos de distribución y sin entrenar nada |
+| Set de evaluación | `val` con cajas revisadas del entrenamiento del modelo, versionado en `annotations/reviewed/` | El `val` del export no es comparable: split por video distinto y cajas sin revisar |
 | Persistencia de predicciones | Best-effort: si MinIO falla no se rompe la request | La inferencia no depende del monitoreo |
 
 ## Resultados medidos
 
 | Qué | Resultado |
 |---|---|
-| `registrar_modelo` de punta a punta | 6 tareas OK en ~17 min en CPU (evaluar y referencia corren en paralelo) |
+| `registrar_modelo` de punta a punta | 6 tareas OK en ~6 min en CPU desde una instalación limpia (evaluar y referencia corren en paralelo) |
+| Evaluación (`val` revisado, 95 imágenes) | **mAP 0,817 · AP50 0,931**, igual al val del release; promoción a `champion` automática con `min_map = 0.5` |
 | REST `/v1/detect` con el RT-DETR | Contrato correcto; 415, 422 y umbral inválido verificados |
 | gRPC `Detect` y `DetectStream` | Funcionan; `DetectStream` devuelve un frame por respuesta, en orden |
 | Tamaño de request (imagen de 209 KB) | gRPC 209 284 B · multipart 209 280 B · JSON+base64 279 052 B (+33 %) |
@@ -59,16 +61,15 @@ flowchart LR
 
 ## Limitaciones conocidas
 
-- **mAP de validación.** El DAG mide mAP 0,066 sobre `val` de este dataset, contra 0,817 (val) y 0,649 (test)
-  del release. No es un fallo de carga: la inferencia coincide con la del repo del modelo. El split por
-  video difiere del de entrenamiento y 102 de las 169 cajas de `val` son pre-etiquetas `pending` sin revisar.
-  Hasta evaluar con anotaciones revisadas, `min_map = 0.5` deja al modelo como `challenger`.
+- **Set de evaluación chico.** El gate usa 95 imágenes de 4 videos. Sirve para detectar un modelo roto o peor
+  que el actual, no para estimar el rendimiento en calles nuevas; el test del release (0,649) no se usa en el DAG
+  para no convertirlo en un set de selección.
 - **Latencia.** Unos 2 s por imagen en CPU frente a 19,5 ms en GPU. Opciones: ONNX Runtime, cuantización
   int8 o GPU. No se midieron en una máquina sin carga.
 - **Streaming simulado.** Una carpeta de imágenes reproducida a N fps por gRPC unario, no un broker de
   mensajes. A 2 s por frame el throughput efectivo es ~0,5 fps.
 - **Drift.** Con ventanas chicas y 4 features hay riesgo de falsas alarmas (comparaciones múltiples sin
-  corrección). La referencia es `val`, que no es tráfico real.
+  corrección). La referencia es el `val` revisado, que no es tráfico real.
 
 ## Trabajo futuro
 

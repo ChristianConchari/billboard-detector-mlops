@@ -15,6 +15,7 @@ from airflow.sdk import Param, dag, get_current_context, task
 
 BUCKET = os.getenv("DATA_REPO_BUCKET_NAME", "data")
 LOCAL_DATA = "/opt/airflow/data"
+LOCAL_ANNOTATIONS = "/opt/airflow/annotations"
 MODEL_NAME = "billboard-detector"
 MODELS_PREFIX = f"models/{MODEL_NAME}"
 MLFLOW_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
@@ -44,6 +45,13 @@ def _download_prefix(s3, prefix, dest):
         path = os.path.join(dest, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         s3.download_file(BUCKET, key, path)
+
+
+def _image_keys(s3, dataset):
+    """{file_name: key} de las imágenes del dataset en raw/, sin importar el split del export."""
+    prefix = f"raw/images/{dataset}/"
+    return {key.rsplit("/", 1)[1]: key for key in _list_keys(s3, prefix)
+            if not key.startswith(prefix + "annotations/") and key.endswith((".jpg", ".jpeg", ".png"))}
 
 
 def _download_github_asset(source, expected_sha256, dest):
@@ -109,6 +117,10 @@ def _sha256_dir(path):
         "weights_sha256": Param("264ea1bcf879b08c4cbfb0f82585b31ff3331d562a676786047ca0a5a2e820af",
                                 type=["string", "null"],
                                 description="SHA-256 esperado del zip (solo gh://); vacío para no verificar"),
+        "eval_annotations": Param(
+            "reviewed/val.json", type="string",
+            description="COCO de evaluación, relativo a annotations/ del repo. Por defecto el val revisado "
+                        "del entrenamiento (ver annotations/reviewed/README.md)"),
         "min_map": Param(0.5, type="number", minimum=0, maximum=1,
                          description="mAP@[.5:.95] mínimo para ser champion"),
     },
@@ -118,8 +130,9 @@ def registrar_modelo():
 
     @task
     def subir_dataset():
-        """data/<dataset>/ → raw/images/<dataset>/<split>/ y val → curated/eval/<dataset>/."""
-        dataset = get_current_context()["params"]["dataset"]
+        """data/<dataset>/ → raw/images/<dataset>/<split>/ y el set revisado → curated/eval/<dataset>/."""
+        params = get_current_context()["params"]
+        dataset = params["dataset"]
         src = os.path.join(LOCAL_DATA, dataset)
         s3 = _s3()
         existing = _list_keys(s3, f"raw/images/{dataset}/")
@@ -141,10 +154,9 @@ def registrar_modelo():
 
         s3.upload_file(os.path.join(src, "manifest.json"), BUCKET, f"raw/images/{dataset}/manifest.json")
         eval_key = f"curated/eval/{dataset}/annotations.json"
-        s3.upload_file(os.path.join(src, "annotations", "val.json"), BUCKET, eval_key)
+        s3.upload_file(os.path.join(LOCAL_ANNOTATIONS, params["eval_annotations"]), BUCKET, eval_key)
         print(f"imágenes subidas={uploaded} ya presentes={skipped}")
-        return {"dataset": dataset, "eval_annotations": eval_key,
-                "eval_images": f"raw/images/{dataset}/val/"}
+        return {"dataset": dataset, "eval_annotations": eval_key}
 
     @task
     def descargar_pesos():
@@ -203,7 +215,7 @@ def registrar_modelo():
 
     @task
     def evaluar(pesos, datos):
-        """Inferencia sobre val y COCO mAP con pycocotools (iscrowd=1 se ignora)."""
+        """Inferencia sobre el set revisado y COCO mAP con pycocotools (iscrowd=1 se ignora)."""
         import tempfile
         import time
 
@@ -221,11 +233,12 @@ def registrar_modelo():
 
             detector = BillboardDetector(weights)
             gt = COCO(ann_path)
+            keys = _image_keys(s3, datos["dataset"])
             billboard_id = next(c["id"] for c in gt.dataset["categories"] if c["name"] == "billboard")
 
             results, latencies = [], []
             for img in gt.dataset["images"]:
-                body = s3.get_object(Bucket=BUCKET, Key=datos["eval_images"] + img["file_name"])["Body"].read()
+                body = s3.get_object(Bucket=BUCKET, Key=keys[img["file_name"]])["Body"].read()
                 t0 = time.perf_counter()
                 # Umbral bajo: mAP necesita la curva completa de precisión-recall
                 _, dets = detector.detect(body, score_threshold=0.01)
@@ -243,7 +256,7 @@ def registrar_modelo():
             map_5095, map_50 = float(ev.stats[0]), float(ev.stats[1])
         else:
             # loadRes no acepta una lista vacía; sin detecciones el mAP es 0
-            print("el modelo no produjo ninguna detección de billboard sobre val")
+            print("el modelo no produjo ninguna detección de billboard sobre el set de evaluación")
             map_5095 = map_50 = 0.0
 
         latencies.sort()
@@ -389,9 +402,10 @@ def registrar_modelo():
             ann_path = os.path.join(tmp, "annotations.json")
             s3.download_file(BUCKET, datos["eval_annotations"], ann_path)
             detector = BillboardDetector(weights)
+            keys = _image_keys(s3, datos["dataset"])
             frames = []
             for img in COCO(ann_path).dataset["images"]:
-                body = s3.get_object(Bucket=BUCKET, Key=datos["eval_images"] + img["file_name"])["Body"].read()
+                body = s3.get_object(Bucket=BUCKET, Key=keys[img["file_name"]])["Body"].read()
                 _, dets = detector.detect(body)  # umbral calibrado, como en producción
                 frames.append(drift.frame_features(dets, drift.image_stats(Image.open(io.BytesIO(body)))))
         ref = {**drift.build_reference(frames), "model_version": pesos["version"],

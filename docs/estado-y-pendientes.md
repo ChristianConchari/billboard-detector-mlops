@@ -7,7 +7,8 @@ El detalle cronológico completo está en la bitácora del vault (`Second brain/
 
 | Pieza | Estado |
 |---|---|
-| DAG `registrar_modelo` con el RT-DETR de `model-v1` | ✅ 6 tareas OK en ~17 min (CPU) |
+| Instalación desde cero siguiendo solo el README | ✅ 2026-10-14, en una máquina sin volúmenes previos |
+| DAG `registrar_modelo` con el RT-DETR de `model-v1` | ✅ 6 tareas OK en ~6 min (CPU); mAP 0.817 / AP50 0.931 sobre el `val` revisado → `champion` automático |
 | Gateway REST (`/v1/detect`, `/v1/model`, `/v1/reload`, `/health`) | ✅ mismo score y caja que antes de la separación; 415/422/422 igual |
 | Servicio `inference` (gRPC `Detect`, `DetectStream`, `GetModel`, `Reload`) | ✅ healthy, carga el champion |
 | Streaming simulado + drift (`scripts/stream_client.py`) | ✅ sin drift normal; con `--degrade oscurecer` marca brillo y contraste |
@@ -16,15 +17,14 @@ El detalle cronológico completo está en la bitácora del vault (`Second brain/
 
 ## Qué NO está verificado o está abierto
 
-1. **mAP de `val` (0.066) no es comparable con el del release (0.649 test / 0.817 val).** Inferencia y carga son correctas.
-   Causa probable, sin confirmar: el GT de `val` tiene 102 de 169 cajas `pending` (sin revisar) y el split por video difiere del del entrenamiento.
-   Por eso `promover` deja el modelo como `challenger` con `min_map = 0.5`.
+1. ~~mAP de `val` no comparable (0.066)~~ **Resuelto (2026-10-14):** el DAG evalúa sobre `annotations/reviewed/val.json` (el `val`
+   revisado del entrenamiento) y mide 0.817, igual al release. Causa confirmada: 138 de las 169 imágenes del `val` del export eran de `train`
+   del modelo, y además 102 de sus cajas estaban sin revisar.
 2. **El beneficio de escalar `inference` NO está demostrado.** Primer intento con 2 réplicas: el gateway mandó todo a la réplica 1
    (canal gRPC creado con 1 réplica, no re-resolvía el DNS). Se agregó `grpc.max_connection_age_ms` (30 s) en `inference` para forzar la
    re-resolución, **pero no se llegó a re-medir con la corrección**. Hay que volver a probar (ver "Cómo retomar").
 3. **Latencia en CPU ~1.4–2 s por imagen.** La mejor medición limpia (máquina libre) fue ~1.4 s; las demás estaban contaminadas por carga externa
    (navegador, otros proyectos). Sin probar ONNX ni cuantización.
-4. **Commits y push:** ver "Estado de git" abajo.
 
 ## Medidas de la separación gateway / inference
 
@@ -51,17 +51,16 @@ git clone <repo> && cd billboard-detector-mlops
 # 2. .env: AIRFLOW_UID=$(id -u)
 docker compose --profile all up -d --build            # ~10 min la primera vez (torch)
 
-# 3. registrar el modelo y dejarlo champion SIN pasos manuales: min_map=0 desactiva el gate
+# 3. registrar el modelo: con mAP 0.817 >= min_map 0.5 queda champion solo
 docker exec airflow-apiserver airflow dags unpause registrar_modelo
-docker exec airflow-apiserver airflow dags trigger registrar_modelo --conf '{"min_map": 0}'   # ~17 min en CPU
+docker exec airflow-apiserver airflow dags trigger registrar_modelo   # ~6 min en CPU
 
 # 4. comprobar
 curl -s localhost:8800/health
 curl -F image=@data/billboards-2025-09-14-sur-lp/images/<una>.jpg localhost:8800/v1/detect
 ```
 
-Con `min_map = 0` el DAG promueve a `champion` por sí mismo (no hace falta `set_registered_model_alias`). Es una decisión consciente mientras la evaluación
-no sea comparable; no es un resultado de calidad.
+Si la build falla con `ReadTimeoutError` de PyPI, construir primero `inference` sola (`docker compose --profile all build inference`).
 
 ### Retomar la prueba de escalado
 
@@ -77,20 +76,19 @@ uv run --with grpcio --with requests --with protobuf scripts/bench_rest_vs_grpc.
 
 ## Pendientes, en orden sugerido
 
-1. Re-medir el escalado con la corrección de `max_connection_age` y cerrar el punto 2 con números.
-2. Resolver la evaluación del mAP: revisar las cajas `pending` de `val` en Label Studio, o evaluar solo sobre `confirmed`/`adjusted` (67 cajas), o traer
-   `reviewed_master.json` de la otra máquina (`~/Documents/MIA/vit-billboard-detector/data/annotations/reviewed/`; solo está `split_assignment.json`).
-3. `scripts/revision_etiquetas.py`: **está versionado en HEAD**, pero en la máquina de desarrollo estaba borrado del working tree (` D` en `git status`).
-   En una máquina nueva, tras clonar, ya existe. Aquí: `git restore scripts/revision_etiquetas.py` (o commitear el borrado si fue a propósito; el README lo menciona).
-4. Limpiar `models/billboard-detector/v1/` en MinIO (es el DETR de una corrida vieja) para que las numeraciones de MinIO y MLflow coincidan.
-5. Probar la instalación **desde cero** siguiendo solo el README (`down -v` borra los volúmenes).
-6. Latencia: con la máquina libre, y si sigue en ~2 s probar ONNX Runtime o cuantización int8.
-7. `DetectStream`: un frame inválido aborta todo el lote.
-8. `docs/alcance.md` todavía dice "ViT" y "DETR sustituto".
-9. GraphQL (opcional en el alcance), seguridad (JWT, rate limiting en el gateway) y CI.
-10. Slides y defensa (sesión 8); confirmar con el docente el trabajo individual (el reglamento pide 2–6).
+1. Re-medir el escalado con la corrección de `max_connection_age` y cerrar el punto 2 con números (máquina libre).
+2. Latencia: con la máquina libre, y si sigue en ~2 s probar ONNX Runtime o cuantización int8.
+3. Slides y defensa (sesión 8); confirmar con el docente el trabajo individual (el reglamento pide 2–6).
+4. `docs/alcance.md` todavía dice "ViT" y "DETR sustituto".
+5. `DetectStream`: un frame inválido aborta todo el lote.
+6. GraphQL (opcional en el alcance), seguridad (JWT, rate limiting en el gateway), tests de los DAGs y CI.
+
+Cerrados el 2026-10-14: evaluación comparable y promoción automática; instalación desde cero; restos del template borrados; numeración de MinIO
+y MLflow alineada (en una instalación limpia el RT-DETR es `v1` en ambos); `scripts/revision_etiquetas.py` restaurado.
 
 ## Trampas conocidas
+
+- El `val` del export de origen **no** sirve para evaluar `model-v1` (split distinto, cajas sin revisar): usar `annotations/reviewed/val.json`.
 
 - Un 503 por "sin champion" y uno por "falló la carga" se ven igual desde afuera: mirar `docker logs billboard-detector-mlops-inference-1`.
 - `docker compose up` con servicios renombrados deja huérfanos: usar `--remove-orphans` (ya se hizo con `fastapi` y `grpc`).
