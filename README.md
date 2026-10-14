@@ -3,8 +3,10 @@
 **VallaVision**: detector de vallas publicitarias en imágenes de calle, puesto en producción.
 TP integrador de *Operaciones de Aprendizaje Automático II* (CEIA · FIUBA). Autor: Christian Conchari.
 
-El foco es la **puesta en producción**, no el modelado: el detector (ViT en PyTorch) entra como
-artefacto ya entrenado; mientras tanto se usa `facebook/detr-resnet-50` como sustituto con el mismo contrato.
+El foco es la **puesta en producción**, no el modelado: el detector entra como artefacto ya entrenado,
+un RT-DETR (ResNet-50) de clase única publicado en el release
+[`model-v1`](https://github.com/ChristianConchari/vit-billboard-detector/releases/tag/model-v1)
+(mAP 0.649 · AP50 0.930 en test, umbral calibrado 0.15).
 
 - [docs/alcance.md](docs/alcance.md): alcance, arquitectura, decisiones, riesgos e hitos
 - [docs/contrato.md](docs/contrato.md): contrato de entrada/salida, layout del Data Lake y DAGs
@@ -18,9 +20,60 @@ Base: [facundolucianna/amq2-service-ml](https://github.com/facundolucianna/amq2-
 | Airflow | http://localhost:8080 (airflow / airflow) |
 | MLflow | http://localhost:5001 |
 | MinIO | http://localhost:9001 (minio / minio123) |
-| API de detección | http://localhost:8800/docs |
+| API REST de detección | http://localhost:8800/docs |
+| API gRPC de detección | `localhost:50051` (`proto/detector.proto`) |
+| Label Studio (`--profile labeling`) | http://localhost:8090 (admin@vallavision.local / labelstudio) |
 
 Buckets: `data` (Data Lake por zonas, ver contrato §4) y `mlflow` (artefactos de MLflow).
+
+## Dataset y revisión de etiquetas
+
+Dataset `billboards-2025-09-14-sur-lp` (export COCO de origen, clase única `billboard`):
+632 imágenes de 26 videos, split por video (train 406 / val 169 / test 57). Las imágenes
+no se versionan en git: descomprimir el zip en `data/`, que queda como
+`data/billboards-2025-09-14-sur-lp/{annotations,images,manifest.json}`.
+
+El export incluye cajas sin revisar (`verdict: pending`). Para revisarlas con Label Studio:
+
+```bash
+docker compose --profile labeling up -d
+python scripts/revision_etiquetas.py importar   # proyecto + imágenes con cajas pendientes
+# en http://localhost:8090: dejar la caja = confirmar, moverla = ajustar, borrarla = rechazar; Submit
+python scripts/revision_etiquetas.py exportar   # -> data/<dataset>/annotations_revisadas/
+```
+
+Las cajas rechazadas quedan con `iscrowd: 1` (pycocotools las ignora al evaluar). La
+revisión se guarda en el volumen `label_studio_data`, así que se puede exportar varias veces.
+
+## Uso rápido
+
+```bash
+docker compose --profile all up -d --build
+# Airflow → DAG registrar_modelo → Trigger: baja model-v1 del release (verifica SHA-256),
+# lo sube a MinIO, evalúa mAP sobre val, lo registra en MLflow y lo promueve a `champion`
+curl -F image=@data/billboards-2025-09-14-sur-lp/images/<imagen>.jpg http://localhost:8800/v1/detect
+```
+
+Sin `champion` la API responde `503` y lo busca cada 30 s; `POST /v1/reload` fuerza la recarga.
+Cada predicción se guarda en `s3://data/predictions/date=…/<request_id>.json`.
+
+gRPC (`Detect` y `DetectStream`) y comparación contra REST:
+
+```bash
+scripts/gen_proto.sh   # genera vallavision/grpc_gen/ (requiere grpcio-tools)
+python scripts/bench_rest_vs_grpc.py <imagen.jpg> -n 50
+```
+
+Tests de la API: `pytest tests` (usan un detector falso, no hace falta el stack).
+
+## Estructura
+
+| Ruta | Qué hay |
+|---|---|
+| `vallavision/` | Paquete compartido: `detector.py` (RT-DETR + pyfunc de MLflow), `service.py` (carga del champion, validación, persistencia), `grpc_server.py` |
+| `airflow/dags/registrar_modelo.py` | DAG de registro y promoción del modelo |
+| `dockerfiles/fastapi/` | Imagen de REST y gRPC (contexto de build: raíz del repo) |
+| `proto/detector.proto` | Contrato gRPC |
 
 ## Estado
 
@@ -28,9 +81,9 @@ Buckets: `data` (Data Lake por zonas, ver contrato §4) y `mlflow` (artefactos d
 |---|---|
 | Stack base (Airflow, MLflow, MinIO, Postgres, FastAPI) levanta healthy | ✅ |
 | Contrato de entrada/salida y layout del Data Lake | ✅ borrador |
-| DAG `registrar_modelo` (DETR → MinIO → MLflow `champion`) | ⏳ |
-| REST `POST /v1/detect` | ⏳ |
-| gRPC `Detect` / `DetectStream` | ⏳ |
+| DAG `registrar_modelo` (RT-DETR → MinIO → MLflow `champion`) | 🔧 escrito, falta verificar de punta a punta |
+| REST `/v1/detect`, `/v1/model`, `/health` | 🔧 escrito, tests de validación ✅, falta probar con el modelo real |
+| gRPC `Detect` / `DetectStream` + benchmark vs REST | 🔧 escrito, sin probar |
 | Streaming + drift, DAG `monitoreo_drift` | ⏳ |
 
 ## Instalación

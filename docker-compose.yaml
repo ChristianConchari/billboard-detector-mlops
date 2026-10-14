@@ -48,12 +48,17 @@ x-airflow-common: &airflow-common
     AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY:-minio123}
     AWS_ENDPOINT_URL_S3: http://s3:9000
     MLFLOW_S3_ENDPOINT_URL: http://s3:9000
+    MLFLOW_TRACKING_URI: http://mlflow:5000
   volumes:
     - ${AIRFLOW_PROJ_DIR:-./airflow}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-./airflow}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-./airflow}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-./airflow}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-./airflow}/secrets:/opt/secrets
+    # Dataset local que sube el DAG registrar_modelo a MinIO
+    - ./data:/opt/airflow/data:ro
+    # Paquete compartido con la API (detector y servicio)
+    - ./vallavision:/opt/airflow/dags/vallavision:ro
   networks:
     - frontend
     - backend
@@ -188,15 +193,15 @@ services:
 
   fastapi:
     restart: always
-    build: "./dockerfiles/fastapi"
+    build:
+      context: .
+      dockerfile: dockerfiles/fastapi/Dockerfile
     image: backend_fastapi
     container_name: fastapi
     profiles:
       - all
     depends_on:
       mlflow:
-        condition: service_healthy
-      airflow-apiserver:
         condition: service_healthy
     ports:
       - "${FASTAPI_PORT:-8800}:8800"
@@ -208,16 +213,46 @@ services:
       - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_ACCESS_KEY:-minio123}
       - MLFLOW_S3_ENDPOINT_URL=http://s3:9000
       - AWS_ENDPOINT_URL_S3=http://s3:9000
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
     command: >
       uvicorn app:app 
       --host 0.0.0.0
       --port 8800
     healthcheck:
-      test: curl --include --request GET http://fastapi:8800/ || exit 1
+      # Sin champion todavía responde 503 (esperado antes de correr registrar_modelo): el
+      # proceso está vivo igual, así que alcanza con que conteste
+      test: curl --silent --output /dev/null http://localhost:8800/docs || exit 1
       interval: 60s
       timeout: 10s
-      start_period: 120s
+      start_period: 60s
       retries: 3
+
+  grpc:
+    restart: always
+    build:
+      context: .
+      dockerfile: dockerfiles/fastapi/Dockerfile
+    image: backend_fastapi
+    container_name: grpc
+    profiles:
+      - all
+    depends_on:
+      fastapi:
+        condition: service_started
+    ports:
+      - "${GRPC_PORT:-50051}:50051"
+    networks:
+      - frontend
+      - backend
+    environment:
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minio}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_ACCESS_KEY:-minio123}
+      - AWS_ENDPOINT_URL_S3=http://s3:9000
+      - MLFLOW_S3_ENDPOINT_URL=http://s3:9000
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
+    command: python -m vallavision.grpc_server
 
   airflow-apiserver:
     <<: *airflow-common

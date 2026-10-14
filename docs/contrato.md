@@ -2,24 +2,24 @@
 
 Define la forma de entrada/salida del detector **una sola vez**, para que REST, gRPC,
 streaming y los resultados en MinIO hablen el mismo idioma. El modelo detrás puede
-cambiar (sustituto DETR → ViT propio) sin romper a ningún consumidor.
+cambiar sin romper a ningún consumidor.
 
 ## 1. Modelo
 
 | Campo | Valor |
 |---|---|
 | Nombre en MLflow Registry | `billboard-detector` |
-| Modelo sustituto (v1) | `facebook/detr-resnet-50` (PyTorch, COCO, 91 clases) |
-| Modelo final | ViT de detección de la otra materia, mismo contrato |
+| Modelo (v1) | RT-DETR ResNet-50 fine-tuned, release [`model-v1`](https://github.com/ChristianConchari/vit-billboard-detector/releases/tag/model-v1) (PyTorch, clase única) |
+| Métricas (test) | mAP 0.649 · AP50 0.930 · AP75 0.794 · 19.5 ms |
+| Umbral | 0.15, calibrado sobre validación (`calibration.json` viaja con los pesos) |
 | Promoción | alias `champion` (modelo servido) y `challenger` (candidato) |
 
 > MLflow 3 depreca las *stages* (`Staging`/`Production`); se usan **aliases**.
 > `champion` cumple el rol de "Production" del documento de alcance.
 
 **Etiquetas.** El contrato no fija la lista de clases: `label` es un `string` y el set
-válido lo publica el modelo en su metadata (`GET /v1/model`). DETR-COCO **no tiene clase
-`billboard`**; durante la fase sustituta se mapea la clase más cercana
-(`street sign`) a `billboard` y se documenta como limitación.
+válido lo publica el modelo en su metadata (`GET /v1/model`). El modelo actual tiene una
+sola clase, `billboard`.
 
 ## 2. REST
 
@@ -30,7 +30,7 @@ Entrada: `multipart/form-data`
 | Campo | Tipo | Regla |
 |---|---|---|
 | `image` | archivo | `image/jpeg` o `image/png`, ≤ 5 MB, lado mayor ≤ 4096 px |
-| `score_threshold` | float (query, opcional) | `0.0–1.0`, por defecto `0.7` |
+| `score_threshold` | float (query, opcional) | `0.0–1.0`; por defecto el umbral calibrado del modelo (0.15) |
 
 Salida `200`:
 
@@ -61,14 +61,18 @@ Errores:
 ### `GET /v1/model`
 Nombre, versión, alias, clases y métricas de evaluación del modelo cargado.
 
+### `POST /v1/reload`
+Fuerza la recarga del `champion` (la API también lo chequea cada 30 s).
+
 ### `GET /health`
 `200 {"status": "ok", "model_loaded": true}` · `503` si el modelo no está cargado.
 
 ## 3. gRPC (Sesión 3)
 
 Mismos campos: la imagen viaja como `bytes` (sin base64). `Detect` (unary) y
-`DetectStream` (server-streaming sobre un lote de frames). El `.proto` se deriva de
-este documento.
+`DetectStream` (server-streaming sobre un lote de frames). El `.proto` está en
+`proto/detector.proto`; `scripts/gen_proto.sh` genera el código. Puerto `50051`.
+Errores: 413 → `RESOURCE_EXHAUSTED`, 415/422 → `INVALID_ARGUMENT`, 503 → `UNAVAILABLE`.
 
 ## 4. Data Lake (MinIO)
 
