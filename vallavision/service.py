@@ -13,6 +13,8 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from vallavision.drift import image_stats
+
 MODEL_NAME = os.getenv("MODEL_NAME", "billboard-detector")
 ALIAS = os.getenv("MODEL_ALIAS", "champion")
 BUCKET = os.getenv("DATA_REPO_BUCKET_NAME", "data")
@@ -126,6 +128,8 @@ class DetectionService:
             "image": size,
             "detections": detections,
             "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+            # Solo para monitoreo: REST/gRPC lo descartan, queda en predictions/
+            "image_stats": image_stats(image),
         }
         return response
 

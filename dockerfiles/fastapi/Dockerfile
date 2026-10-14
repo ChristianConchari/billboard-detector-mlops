@@ -7,6 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 COPY dockerfiles/fastapi/requirements.txt /requirements.txt
 RUN pip install --upgrade pip && pip install --no-cache-dir -r /requirements.txt
+# vallavision.detector importa mlflow.pyfunc, que necesita pandas (va aparte para no
+# invalidar la capa de torch)
+RUN pip install --no-cache-dir pandas
 
 COPY dockerfiles/fastapi/app.py /app/app.py
 COPY proto /app/proto

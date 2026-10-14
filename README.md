@@ -64,14 +64,28 @@ scripts/gen_proto.sh   # genera vallavision/grpc_gen/ (requiere grpcio-tools)
 python scripts/bench_rest_vs_grpc.py <imagen.jpg> -n 50
 ```
 
-Tests de la API: `pytest tests` (usan un detector falso, no hace falta el stack).
+Streaming simulado y drift: `scripts/stream_client.py` reproduce una carpeta de imágenes como cámara
+(un `Detect` por frame) y reporta por ventana throughput, latencia p50/p95 y detecciones por frame; con
+`--reference` también compara contra la referencia (KS) y `--degrade oscurecer` provoca drift para la demo.
+El DAG `monitoreo_drift` (horario) hace la misma comparación sobre `predictions/` y falla si hay drift;
+la referencia la genera `registrar_modelo` sobre `val` en `curated/reference/`.
+
+```bash
+uv run --with grpcio --with pillow --with numpy --with scipy --with boto3 scripts/stream_client.py \
+  data/billboards-2025-09-14-sur-lp/images/ --fps 5 --degrade oscurecer
+```
+
+Tests de la API y de drift: `pytest tests` (usan un detector falso, no hace falta el stack).
 
 ## Estructura
 
 | Ruta | Qué hay |
 |---|---|
 | `vallavision/` | Paquete compartido: `detector.py` (RT-DETR + pyfunc de MLflow), `service.py` (carga del champion, validación, persistencia), `grpc_server.py` |
-| `airflow/dags/registrar_modelo.py` | DAG de registro y promoción del modelo |
+| `vallavision/drift.py` | Features por frame, referencia y test KS |
+| `airflow/dags/registrar_modelo.py` | DAG de registro y promoción del modelo (genera también la referencia de drift) |
+| `airflow/dags/monitoreo_drift.py` | DAG horario: `predictions/` vs referencia → reporte en `monitoring/drift/` |
+| `scripts/stream_client.py` | Cámara simulada + métricas por ventana por gRPC |
 | `dockerfiles/fastapi/` | Imagen de REST y gRPC (contexto de build: raíz del repo) |
 | `proto/detector.proto` | Contrato gRPC |
 
@@ -81,10 +95,20 @@ Tests de la API: `pytest tests` (usan un detector falso, no hace falta el stack)
 |---|---|
 | Stack base (Airflow, MLflow, MinIO, Postgres, FastAPI) levanta healthy | ✅ |
 | Contrato de entrada/salida y layout del Data Lake | ✅ borrador |
-| DAG `registrar_modelo` (RT-DETR → MinIO → MLflow `champion`) | 🔧 escrito, falta verificar de punta a punta |
-| REST `/v1/detect`, `/v1/model`, `/health` | 🔧 escrito, tests de validación ✅, falta probar con el modelo real |
-| gRPC `Detect` / `DetectStream` + benchmark vs REST | 🔧 escrito, sin probar |
-| Streaming + drift, DAG `monitoreo_drift` | ⏳ |
+| DAG `registrar_modelo` (RT-DETR → MinIO → MLflow → referencia de drift) | ✅ corre de punta a punta; ⚠️ la promoción a `champion` está bloqueada por el mAP (ver abajo) |
+| REST `/v1/detect`, `/v1/model`, `/health` | ✅ probado con el RT-DETR real |
+| gRPC `Detect` + benchmark vs REST | ✅ probado (`DetectStream` sin probar) |
+| Streaming + drift (`stream_client.py`), DAG `monitoreo_drift` | ✅ sin drift con tráfico normal; con `--degrade oscurecer` marca brillo y contraste |
+
+### ⚠️ mAP de `registrar_modelo` no comparable con el del release
+
+Sobre `val` de este dataset el DAG mide **mAP 0.066 / AP50 0.24**, contra 0.817 (val) y 0.649 (test) del
+release. La inferencia es la misma que la del repo del modelo y las detecciones se ven bien, así que no es un
+fallo de carga. La diferencia está en la evaluación: (1) el split por video de este dataset no coincide con el
+del entrenamiento (2 de sus 4 videos de `val` eran de train del modelo) y (2) 102 de las 169 cajas de `val` son
+pre-etiquetas `pending`, mientras que el modelo se evaluó con cajas revisadas a mano. Mientras no se evalúe
+con anotaciones revisadas, `min_map` (0.5) deja al modelo como `challenger`; para probar el serving se fijó
+`champion` a mano con `set_registered_model_alias`.
 
 ## Instalación
 

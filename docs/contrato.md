@@ -84,7 +84,9 @@ s3://data/
   raw/stream/date=YYYY-MM-DD/…              frames que llegan por streaming
   curated/eval/<dataset>/annotations.json   set de validación anotado (COCO)
   models/billboard-detector/v<N>/…          pesos + metadata versionados
-  predictions/date=YYYY-MM-DD/<request_id>.json   salida de cada inferencia (formato §2)
+  predictions/date=YYYY-MM-DD/<request_id>.json   salida de cada inferencia (formato §2 + `image_stats`)
+  curated/reference/billboard-detector/v<N>.json  features de `val` por versión (referencia de drift)
+  monitoring/drift/<timestamp>.json               reportes de `monitoreo_drift`
 ```
 
 Bucket `mlflow`: artefactos de MLflow (lo gestiona MLflow, no se escribe a mano).
@@ -94,4 +96,6 @@ Bucket `mlflow`: artefactos de MLflow (lo gestiona MLflow, no se escribe a mano)
 | DAG | Qué hace |
 |---|---|
 | `registrar_modelo` | descarga pesos → `models/…/v<N>/` → evalúa sobre `curated/eval` (mAP) → registra en MLflow → alias `champion` si supera el umbral y al campeón actual |
-| `monitoreo_drift` | lee `predictions/` recientes → compara contra la referencia (score medio, detecciones por frame, brillo/contraste) → reporte o alerta |
+| `monitoreo_drift` | lee `predictions/` recientes del champion → compara contra la referencia con KS de dos muestras (`n_detections`, `score_mean`, `brightness`, `contrast`; α=0.01) → reporte en `monitoring/drift/`; la tarea falla si hay drift. Con menos de 20 frames no emite veredicto |
+
+Cada predicción persistida agrega `image_stats` (`brightness` y `contrast` de la luminancia, 0–1); REST y gRPC no lo devuelven. `registrar_modelo` genera la referencia infiriendo `val` con el umbral calibrado.

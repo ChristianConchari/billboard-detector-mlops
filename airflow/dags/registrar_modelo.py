@@ -5,6 +5,7 @@ si los pesos ya están en MinIO (mismo sha256) se reutiliza su v<N>, y si esa v<
 está registrada en MLflow no se vuelve a registrar.
 """
 
+import io
 import json
 import os
 import re
@@ -367,9 +368,42 @@ def registrar_modelo():
               f"champion previo: {champ.version if champ else '-'} (mAP={champ_map}), min_map={min_map}")
         return alias
 
+    @task
+    def referencia(pesos, datos):
+        """Features por frame de val con el umbral calibrado → referencia de drift."""
+        import tempfile
+
+        from PIL import Image
+        from pycocotools.coco import COCO
+        from vallavision import drift
+        from vallavision.detector import BillboardDetector
+
+        s3 = _s3()
+        key = f"curated/reference/{MODEL_NAME}/v{pesos['version']}.json"
+        if key in _list_keys(s3, key):
+            print(f"referencia {key} ya existe")
+            return key
+        with tempfile.TemporaryDirectory() as tmp:
+            weights = os.path.join(tmp, "weights")
+            _download_prefix(s3, pesos["uri"][len(f"s3://{BUCKET}/"):], weights)
+            ann_path = os.path.join(tmp, "annotations.json")
+            s3.download_file(BUCKET, datos["eval_annotations"], ann_path)
+            detector = BillboardDetector(weights)
+            frames = []
+            for img in COCO(ann_path).dataset["images"]:
+                body = s3.get_object(Bucket=BUCKET, Key=datos["eval_images"] + img["file_name"])["Body"].read()
+                _, dets = detector.detect(body)  # umbral calibrado, como en producción
+                frames.append(drift.frame_features(dets, drift.image_stats(Image.open(io.BytesIO(body)))))
+        ref = {**drift.build_reference(frames), "model_version": pesos["version"],
+               "created_at": datetime.now(timezone.utc).isoformat()}
+        s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(ref).encode())
+        print(f"referencia: {ref['n_frames']} frames → s3://{BUCKET}/{key}")
+        return key
+
     datos = subir_dataset()
     pesos = descargar_pesos()
     metricas = evaluar(pesos, datos)
+    referencia(pesos, datos)
     promover(registrar(pesos, datos, metricas))
 
 
