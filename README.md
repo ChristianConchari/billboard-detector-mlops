@@ -10,6 +10,7 @@ un RT-DETR (ResNet-50) de clase única publicado en el release
 
 - [docs/alcance.md](docs/alcance.md): alcance, arquitectura, decisiones, riesgos e hitos
 - [docs/contrato.md](docs/contrato.md): contrato de entrada/salida, layout del Data Lake y DAGs
+- [docs/arquitectura.md](docs/arquitectura.md): diagrama, decisiones, resultados medidos y limitaciones
 
 ## Servicios
 

@@ -63,7 +63,7 @@ class BillboardDetector:
         image = image.convert("RGB")
         width, height = image.size
 
-        with self._torch.no_grad():
+        with self._torch.inference_mode():
             outputs = self.model(**self.processor(images=image, return_tensors="pt"))
         result = self.processor.post_process_object_detection(
             outputs, threshold=score_threshold, target_sizes=[(height, width)]
