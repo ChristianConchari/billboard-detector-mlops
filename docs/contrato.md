@@ -74,6 +74,16 @@ Mismos campos: la imagen viaja como `bytes` (sin base64). `Detect` (unary) y
 `proto/detector.proto`; `scripts/gen_proto.sh` genera el código. Puerto `50051`.
 Errores: 413 → `RESOURCE_EXHAUSTED`, 415/422 → `INVALID_ARGUMENT`, 503 → `UNAVAILABLE`.
 
+Además de `Detect` y `DetectStream`, el servicio expone `GetModel` (modelo cargado: versión, alias,
+etiquetas, umbral calibrado y métricas; `loaded=false` si no hay champion) y `Reload` (busca el champion
+en MLflow; `UNAVAILABLE` si no puede). Los usa el gateway REST para `/health`, `/v1/model` y `/v1/reload`.
+
+**Topología.** El servicio de inferencia (`inference`) es el único que carga el modelo y persiste en
+`predictions/`. El REST es un gateway sin modelo que valida tipo, tamaño y umbral, reenvía los bytes por
+gRPC y traduce los errores (`INVALID_ARGUMENT` → 422, `RESOURCE_EXHAUSTED` → 413, `UNAVAILABLE` → 503,
+`DEADLINE_EXCEEDED` → 504). `inference` se puede escalar con réplicas (`--scale inference=N`); el
+gateway las reparte por DNS con `round_robin`. `latency_ms` mide solo la inferencia, no el salto del gateway.
+
 ## 4. Data Lake (MinIO)
 
 Bucket `data`, organizado por zonas:

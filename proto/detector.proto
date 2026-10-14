@@ -8,6 +8,10 @@ service Detector {
   rpc Detect(DetectRequest) returns (DetectResponse);
   // Un lote de frames → una respuesta por frame, a medida que se infieren (server-streaming).
   rpc DetectStream(DetectBatchRequest) returns (stream DetectResponse);
+  // Modelo cargado en este servidor (lo usa el gateway para /health y /v1/model).
+  rpc GetModel(GetModelRequest) returns (ModelInfo);
+  // Fuerza la búsqueda del champion en MLflow; devuelve el modelo resultante.
+  rpc Reload(ReloadRequest) returns (ModelInfo);
 }
 
 message DetectRequest {
@@ -42,4 +46,16 @@ message DetectResponse {
   ImageSize image = 3;
   repeated Detection detections = 4; // ordenadas por score descendente
   float latency_ms = 5;
+}
+
+message GetModelRequest {}
+
+message ReloadRequest {}
+
+message ModelInfo {
+  bool loaded = 1;                  // false mientras no haya champion
+  ModelRef model = 2;
+  repeated string labels = 3;
+  float score_threshold = 4;        // umbral calibrado por defecto
+  map<string, double> metrics = 5;  // métricas de evaluación del run de MLflow
 }

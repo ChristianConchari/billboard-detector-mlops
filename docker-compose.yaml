@@ -191,57 +191,51 @@ services:
       timeout: 10s
       retries: 3
 
-  fastapi:
+  # Gateway REST: sin modelo ni torch. Valida y reenvía por gRPC al servicio `inference`.
+  gateway:
     restart: always
     build:
       context: .
-      dockerfile: dockerfiles/fastapi/Dockerfile
-    image: backend_fastapi
-    container_name: fastapi
+      dockerfile: dockerfiles/gateway/Dockerfile
+    image: backend_gateway
+    container_name: gateway
     profiles:
       - all
     depends_on:
-      mlflow:
-        condition: service_healthy
+      inference:
+        condition: service_started
     ports:
       - "${FASTAPI_PORT:-8800}:8800"
     networks:
       - frontend
       - backend
     environment:
-      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minio}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_ACCESS_KEY:-minio123}
-      - MLFLOW_S3_ENDPOINT_URL=http://s3:9000
-      - AWS_ENDPOINT_URL_S3=http://s3:9000
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
-    command: >
-      uvicorn app:app 
-      --host 0.0.0.0
-      --port 8800
+      - INFERENCE_ADDR=inference:50051
     healthcheck:
-      # Sin champion todavía responde 503 (esperado antes de correr registrar_modelo): el
-      # proceso está vivo igual, así que alcanza con que conteste
-      test: curl --silent --output /dev/null http://localhost:8800/docs || exit 1
+      # Sin champion responde 503 en /health (esperado antes de correr registrar_modelo):
+      # alcanza con que el proceso conteste
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8800/docs', timeout=5)"]
       interval: 60s
       timeout: 10s
-      start_period: 60s
+      start_period: 20s
       retries: 3
 
-  grpc:
+  # Servicio de inferencia: único dueño del modelo (gRPC). Por defecto una réplica en el
+  # puerto fijo 50051. Para escalar, ver docker-compose.scale.yaml (sin container_name, para
+  # poder tener varias réplicas; el gateway las alcanza por DNS).
+  inference:
     restart: always
     build:
       context: .
-      dockerfile: dockerfiles/fastapi/Dockerfile
-    image: backend_fastapi
-    container_name: grpc
+      dockerfile: dockerfiles/inference/Dockerfile
+    image: backend_inference
     profiles:
       - all
     depends_on:
-      fastapi:
-        condition: service_started
+      mlflow:
+        condition: service_healthy
     ports:
-      - "${GRPC_PORT:-50051}:50051"
+      - "50051:50051"
     networks:
       - frontend
       - backend
@@ -252,7 +246,16 @@ services:
       - MLFLOW_S3_ENDPOINT_URL=http://s3:9000
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
+      # Un forward a la vez por réplica; el paralelismo viene de las réplicas
+      - INFERENCE_CONCURRENCY=${INFERENCE_CONCURRENCY:-1}
+      - TORCH_NUM_THREADS=${TORCH_NUM_THREADS:-4}
     command: python -m vallavision.grpc_server
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 50051), 3)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
 
   airflow-apiserver:
     <<: *airflow-common

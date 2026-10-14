@@ -17,13 +17,11 @@ flowchart LR
     REG -->|modelo + métricas + alias| ML[MLflow Registry]
     ML -->|alias champion| SRV
     S3 -->|pesos| SRV
-    subgraph SRV[Servicio de inferencia - una imagen, dos procesos]
-        REST[FastAPI REST<br/>:8800]
-        GRPC[gRPC<br/>:50051]
+    subgraph SRV[Servicio de inferencia]
+        REST[Gateway REST<br/>:8800 · sin modelo] -->|gRPC| GRPC[inference<br/>:50051 · modelo + torch<br/>réplicas con --scale]
     end
     C1[cliente REST] --> REST
     C2[stream_client.py<br/>cámara simulada] --> GRPC
-    REST -->|predictions/| S3
     GRPC -->|predictions/| S3
     S3 -->|predictions/ + referencia| MON
     MON -->|monitoring/drift/| S3
@@ -36,7 +34,8 @@ flowchart LR
 | Promoción de modelos | **Aliases** de MLflow 3 (`champion`/`challenger`) | Las *stages* están deprecadas en MLflow 3 |
 | Carga en el servicio | `BillboardDetector` directo desde MinIO, no `pyfunc.load_model` | Hace falta controlar latencia, umbral y tamaño por request |
 | Código compartido | Paquete `vallavision/` en la raíz, montado en Airflow y copiado a la imagen de la API | Lo que se evalúa es exactamente lo que se sirve |
-| REST y gRPC | Misma imagen y misma lógica (`service.py`) | Un solo lugar para validación, umbral y persistencia |
+| Separación gateway / inferencia | REST en un gateway sin torch; el modelo vive solo en `inference` (gRPC) | Una sola copia del modelo por réplica, imagen de borde liviana, escalado independiente y lugar para la seguridad de la Sesión 7 |
+| Validación | Chequeos baratos en el gateway; decodificado y dimensiones en `inference` (`validation.py` compartido) | El gateway no decodifica imágenes y los clientes gRPC directos quedan igual de protegidos |
 | Umbral por defecto | El calibrado sobre validación (`calibration.json`, 0.15), no un valor fijo | Viaja con el checkpoint y es el que maximiza F1 |
 | Fuente de pesos | `gh://owner/repo@tag/asset.zip` con verificación SHA-256 | Reproducible sin pasos manuales ni credenciales |
 | Idempotencia | Mismos pesos (sha256) → misma `v<N>` y misma versión de MLflow | Re-ejecutar el DAG no duplica nada |
@@ -53,6 +52,9 @@ flowchart LR
 | Tamaño de request (imagen de 209 KB) | gRPC 209 284 B · multipart 209 280 B · JSON+base64 279 052 B (+33 %) |
 | Streaming normal | Sin drift en 2 ventanas de 20 frames |
 | Streaming con frames oscurecidos | Drift en `brightness` y `contrast` en ambas ventanas |
+| Separación gateway / inferencia | Imagen de borde 2.3 GB → **245 MB**; RAM 1448 → **647 MiB** (una sola copia del modelo); build del gateway 31 s; resultado idéntico al anterior |
+| Escalado con `--scale inference=2` | **Sin demostrar.** Primer intento: el gateway usaba solo la réplica 1; se corrigió con `max_connection_age` y falta re-medir |
+| Tests | 40 (gateway con stub gRPC, servicio, servidor gRPC real, drift) |
 | Latencia de inferencia en CPU | ~1,5–2 s por imagen (8 núcleos, solo AVX2); el forward domina, el preprocesamiento son 11 ms |
 
 ## Limitaciones conocidas

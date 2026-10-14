@@ -11,6 +11,7 @@ un RT-DETR (ResNet-50) de clase única publicado en el release
 - [docs/alcance.md](docs/alcance.md): alcance, arquitectura, decisiones, riesgos e hitos
 - [docs/contrato.md](docs/contrato.md): contrato de entrada/salida, layout del Data Lake y DAGs
 - [docs/arquitectura.md](docs/arquitectura.md): diagrama, decisiones, resultados medidos y limitaciones
+- [docs/estado-y-pendientes.md](docs/estado-y-pendientes.md): **estado actual, medidas, pendientes y cómo retomar en otra máquina**
 
 ## Servicios
 
@@ -21,8 +22,8 @@ Base: [facundolucianna/amq2-service-ml](https://github.com/facundolucianna/amq2-
 | Airflow | http://localhost:8080 (airflow / airflow) |
 | MLflow | http://localhost:5001 |
 | MinIO | http://localhost:9001 (minio / minio123) |
-| API REST de detección | http://localhost:8800/docs |
-| API gRPC de detección | `localhost:50051` (`proto/detector.proto`) |
+| Gateway REST | http://localhost:8800/docs (sin modelo; reenvía por gRPC) |
+| Servicio de inferencia (gRPC) | `localhost:50051` (`proto/detector.proto`); único dueño del modelo, escalable |
 | Label Studio (`--profile labeling`) | http://localhost:8090 (admin@vallavision.local / labelstudio) |
 
 Buckets: `data` (Data Lake por zonas, ver contrato §4) y `mlflow` (artefactos de MLflow).
@@ -55,14 +56,17 @@ docker compose --profile all up -d --build
 curl -F image=@data/billboards-2025-09-14-sur-lp/images/<imagen>.jpg http://localhost:8800/v1/detect
 ```
 
-Sin `champion` la API responde `503` y lo busca cada 30 s; `POST /v1/reload` fuerza la recarga.
+Sin `champion` el gateway responde `503` y lo busca cada 30 s; `POST /v1/reload` fuerza la recarga.
 Cada predicción se guarda en `s3://data/predictions/date=…/<request_id>.json`.
 
 gRPC (`Detect` y `DetectStream`) y comparación contra REST:
 
 ```bash
 scripts/gen_proto.sh   # genera vallavision/grpc_gen/ (requiere grpcio-tools)
-python scripts/bench_rest_vs_grpc.py <imagen.jpg> -n 50
+python scripts/bench_rest_vs_grpc.py <imagen.jpg> -n 12 -c 1 2 4   # latencia y req/s con 1, 2 y 4 clientes
+
+# Escalar la inferencia (opcional, beneficio sin demostrar todavía; ver docs/estado-y-pendientes.md):
+docker compose -f docker-compose.yaml -f docker-compose.scale.yaml --profile all up -d --scale inference=2
 ```
 
 Streaming simulado y drift: `scripts/stream_client.py` reproduce una carpeta de imágenes como cámara
@@ -87,7 +91,8 @@ Tests de la API y de drift: `pytest tests` (usan un detector falso, no hace falt
 | `airflow/dags/registrar_modelo.py` | DAG de registro y promoción del modelo (genera también la referencia de drift) |
 | `airflow/dags/monitoreo_drift.py` | DAG horario: `predictions/` vs referencia → reporte en `monitoring/drift/` |
 | `scripts/stream_client.py` | Cámara simulada + métricas por ventana por gRPC |
-| `dockerfiles/fastapi/` | Imagen de REST y gRPC (contexto de build: raíz del repo) |
+| `dockerfiles/gateway/` | Gateway REST: FastAPI sin torch, imagen liviana (multi-etapa; contexto de build: raíz del repo) |
+| `dockerfiles/inference/` | Servicio de inferencia: torch + modelo, expone gRPC |
 | `proto/detector.proto` | Contrato gRPC |
 
 ## Estado
@@ -98,7 +103,9 @@ Tests de la API y de drift: `pytest tests` (usan un detector falso, no hace falt
 | Contrato de entrada/salida y layout del Data Lake | ✅ borrador |
 | DAG `registrar_modelo` (RT-DETR → MinIO → MLflow → referencia de drift) | ✅ corre de punta a punta; ⚠️ la promoción a `champion` está bloqueada por el mAP (ver abajo) |
 | REST `/v1/detect`, `/v1/model`, `/health` | ✅ probado con el RT-DETR real |
-| gRPC `Detect` + benchmark vs REST | ✅ probado (`DetectStream` sin probar) |
+| gRPC `Detect` / `DetectStream` + benchmark vs REST | ✅ probado, con tests |
+| Gateway REST (245 MB) + servicio de inferencia separados | ✅ RAM −55 % (647 vs 1448 MiB), mismo resultado que antes, 40 tests |
+| Escalado de `inference` con `--scale` | ⏳ sin demostrar: re-medir con `max_connection_age` (ver `docs/estado-y-pendientes.md`) |
 | Streaming + drift (`stream_client.py`), DAG `monitoreo_drift` | ✅ sin drift con tráfico normal; con `--degrade oscurecer` marca brillo y contraste |
 
 ### ⚠️ mAP de `registrar_modelo` no comparable con el del release

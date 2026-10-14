@@ -14,29 +14,20 @@ import uuid
 from datetime import datetime, timezone
 
 from vallavision.drift import image_stats
+from vallavision.validation import (  # noqa: F401 — reexportados para quien importe desde service
+    MAX_BYTES,
+    MAX_SIDE,
+    DetectionError,
+    ModelNotLoaded,
+    check_size,
+    check_threshold,
+    check_type,
+)
 
 MODEL_NAME = os.getenv("MODEL_NAME", "billboard-detector")
 ALIAS = os.getenv("MODEL_ALIAS", "champion")
 BUCKET = os.getenv("DATA_REPO_BUCKET_NAME", "data")
 MLFLOW_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
-
-MAX_BYTES = 5 * 1024 * 1024
-MAX_SIDE = 4096
-ALLOWED_TYPES = ("image/jpeg", "image/png")
-
-
-class DetectionError(Exception):
-    """Error de entrada con el código HTTP del contrato (413/415/422)."""
-
-    def __init__(self, status, message):
-        super().__init__(message)
-        self.status = status
-        self.message = message
-
-
-class ModelNotLoaded(Exception):
-    """No hay modelo `champion` cargado (503)."""
-
 
 def _s3():
     import boto3
@@ -103,12 +94,9 @@ class DetectionService:
         """Valida, infiere y persiste. Devuelve el JSON del contrato §2."""
         if not self.loaded:
             raise ModelNotLoaded()
-        if content_type is not None and content_type not in ALLOWED_TYPES:
-            raise DetectionError(415, f"tipo no soportado: {content_type}")
-        if len(image_bytes) > MAX_BYTES:
-            raise DetectionError(413, f"imagen > {MAX_BYTES // (1024 * 1024)} MB")
-        if score_threshold is not None and not 0.0 <= score_threshold <= 1.0:
-            raise DetectionError(422, "score_threshold debe estar entre 0 y 1")
+        check_type(content_type)
+        check_size(len(image_bytes))
+        check_threshold(score_threshold)
 
         from PIL import Image, UnidentifiedImageError
 
