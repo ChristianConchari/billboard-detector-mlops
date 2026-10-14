@@ -80,7 +80,8 @@ uv run --with grpcio --with requests --with protobuf scripts/bench_rest_vs_grpc.
 1. Re-medir el escalado con la corrección de `max_connection_age` y cerrar el punto 2 con números.
 2. Resolver la evaluación del mAP: revisar las cajas `pending` de `val` en Label Studio, o evaluar solo sobre `confirmed`/`adjusted` (67 cajas), o traer
    `reviewed_master.json` de la otra máquina (`~/Documents/MIA/vit-billboard-detector/data/annotations/reviewed/`; solo está `split_assignment.json`).
-3. `scripts/revision_etiquetas.py`: figura como agregado en el índice de git y borrado en disco; el README lo menciona. Restaurar (`git restore`) o quitar la mención.
+3. `scripts/revision_etiquetas.py`: **está versionado en HEAD**, pero en la máquina de desarrollo estaba borrado del working tree (` D` en `git status`).
+   En una máquina nueva, tras clonar, ya existe. Aquí: `git restore scripts/revision_etiquetas.py` (o commitear el borrado si fue a propósito; el README lo menciona).
 4. Limpiar `models/billboard-detector/v1/` en MinIO (es el DETR de una corrida vieja) para que las numeraciones de MinIO y MLflow coincidan.
 5. Probar la instalación **desde cero** siguiendo solo el README (`down -v` borra los volúmenes).
 6. Latencia: con la máquina libre, y si sigue en ~2 s probar ONNX Runtime o cuantización int8.
