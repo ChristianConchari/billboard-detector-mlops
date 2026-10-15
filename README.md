@@ -5,8 +5,8 @@
 **VallaVision** pone en producción un detector de **vallas publicitarias** en imágenes de cámaras de calle.
 TP integrador de *Operaciones de Aprendizaje Automático II* (CEIA · FIUBA). Autor: Christian Conchari.
 
-**Caso de uso.** El servicio está pensado como el microservicio de detección de **la plataforma**, una plataforma de
-etiquetado geolocalizado de imágenes: vehículos de relevamiento recorren la ciudad con una cámara, cada frame llega
+**Caso de uso.** El servicio está pensado como el microservicio de detección de una **plataforma de
+etiquetado geolocalizado de imágenes**: vehículos de relevamiento recorren la ciudad con una cámara, cada frame llega
 con su posición GPS, y VallaVision devuelve dónde hay vallas para que la plataforma las etiquete en el mapa. Este
 repositorio implementa y demuestra ese servicio de forma autónoma; la integración con la plataforma queda fuera de su alcance.
 

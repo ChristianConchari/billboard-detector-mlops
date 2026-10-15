@@ -116,7 +116,7 @@ prefijos ([seguridad.md](seguridad.md)).
 
 ```
 s3://data/
-  raw/images/<dataset>/<split>/…                  imágenes originales (split del export de origen)
+  raw/images/<dataset>/<split>/…                  imágenes originales (split del export original)
   models/billboard-detector/v<N>/…                pesos + metadata.json (sha256 del checkpoint y del zip); v<N> inmutable
   predictions/date=YYYY-MM-DD/<request_id>.json   cada inferencia: §2 + campos de monitoreo (abajo)
   curated/eval/<dataset>/<nombre>-<sha12>.json    sets revisados de gate y referencia (inmutables, sha en el nombre)

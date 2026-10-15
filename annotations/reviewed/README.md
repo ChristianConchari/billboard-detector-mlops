@@ -10,7 +10,7 @@ Clase única `billboard`. `val` y `test` tienen videos disjuntos (y disjuntos de
 | `test.json` | 95 | 126 | 7 | `11bd28e3…` | **gate** de `registrar_modelo`: no intervino ni en el entrenamiento ni en la calibración del umbral |
 | `val.json` | 95 | 130 | 7 | `48076fa5…` | **referencia de drift**. Se usó para elegir el checkpoint y calibrar el umbral, así que no sirve como gate |
 
-No se usan las anotaciones del export de origen (`data/<dataset>/annotations/`) para evaluar:
+No se usan las anotaciones del export original del dataset (`data/<dataset>/annotations/`) para evaluar:
 su split por video no coincide con el del entrenamiento (138 de las 169 imágenes de su `val` eran
 de `train` del modelo) y 102 de las 169 cajas de su `val` son pre-etiquetas `pending`, sin revisar.
 

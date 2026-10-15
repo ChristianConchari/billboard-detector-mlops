@@ -52,7 +52,7 @@ drift en el consumidor, muestreo de imágenes y reetiquetado, Label Studio, apre
 
 ## Trampas conocidas
 
-- El `val` del export de origen **no** sirve para evaluar `model-v1` (split distinto, cajas sin revisar); el gate usa
+- El `val` del export original del dataset **no** sirve para evaluar `model-v1` (split distinto, cajas sin revisar); el gate usa
   `annotations/reviewed/test.json` y la referencia de drift `annotations/reviewed/val.json`.
 - `inference` queda `unhealthy` hasta que exista un champion (su healthcheck exige el modelo cargado); el gateway
   queda healthy si alcanza a inference.

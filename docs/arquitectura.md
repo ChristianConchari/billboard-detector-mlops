@@ -1,7 +1,7 @@
 # Arquitectura y decisiones
 
-Resumen para la defensa. Contexto: VallaVision es el microservicio de detección pensado para integrarse a la plataforma,
-una plataforma de etiquetado geolocalizado de imágenes (vehículos de relevamiento con cámara; cada frame con su
+Resumen para la defensa. Contexto: VallaVision es el microservicio de detección pensado para integrarse a una
+plataforma de etiquetado geolocalizado de imágenes (vehículos de relevamiento con cámara; cada frame con su
 posición GPS). El gateway REST es la API que consumiría la plataforma, Redpanda la ingesta de los vehículos y
 `predictions/` las etiquetas resultantes. El contrato está en [contrato.md](contrato.md), los controles de seguridad en
 [seguridad.md](seguridad.md) y el diseño original (Hito #1) en [alcance.md](alcance.md).
@@ -84,7 +84,7 @@ evaluaron y se sacaron:
 | RPCs de streaming (`DetectStream`, `DetectLive`) | Tres caminos de streaming para una sola necesidad: el broker ya da buffer, orden por cámara y replay. gRPC queda para llamadas internas unarias |
 | Drift en el consumidor de streaming | Duplicaba el cálculo y la política de alertas de `monitoreo_drift`, que además ve el tráfico REST |
 | Guardar una muestra de imágenes + manifiesto de reetiquetado | Sin un pipeline de etiquetado que los consuma, guardar fotos de la calle (caras, patentes) es costo de privacidad sin beneficio |
-| Label Studio | Herramienta de curación del dataset de origen; el trabajo terminó (se usan las cajas revisadas del repo del modelo) y no es parte del sistema en producción |
+| Label Studio | Herramienta de curación del dataset original; el trabajo terminó (se usan las cajas revisadas del repo del modelo) y no es parte del sistema en producción |
 | Aprendizaje federado | Un solo detector entrenado de forma central: sería una simulación sin caso real |
 
 ## Limitaciones conocidas

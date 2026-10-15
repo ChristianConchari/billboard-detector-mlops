@@ -8,8 +8,8 @@ La demo combina dos cosas, cada una donde se ve mejor:
   REST vs gRPC, los ataques de seguridad, el streaming de los vehículos y el drift con gráficos. La lógica está en
   `notebooks/demo_utils.py`, así las celdas son de una o dos líneas.
 
-El relato es el del caso de uso: VallaVision como el microservicio de detección de **la plataforma**, una plataforma de
-etiquetado geolocalizado de imágenes (vehículos de relevamiento con cámara; cada frame con su posición GPS, visible
+El relato es el del caso de uso: VallaVision como el microservicio de detección de una **plataforma de
+etiquetado geolocalizado de imágenes** (vehículos de relevamiento con cámara; cada frame con su posición GPS, visible
 en las fotos). Sin detalles de la plataforma: solo su papel como consumidora del servicio.
 
 ```bash

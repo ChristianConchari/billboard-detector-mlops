@@ -14,7 +14,7 @@
 > | GraphQL "por confirmar" | Evaluado y descartado: no hay un cliente que componga consultas (ver arquitectura.md, "Qué se dejó afuera") |
 > | Seguridad avanzada fuera de alcance | Seguridad SAIF en el gateway, gRPC y MinIO. Siguen fuera: aprendizaje federado y desenfoque de caras y patentes |
 > | Streaming con una carpeta reproducida | Redpanda (Kafka) + consumidor con ventanas por event time; gRPC solo para llamadas internas |
-> | Formato y origen de datos por definir | COCO, export de origen; las cajas revisadas a mano vienen del repo del modelo (`annotations/reviewed/`) |
+> | Formato y origen de datos por definir | COCO, export original del dataset; las cajas revisadas a mano vienen del repo del modelo (`annotations/reviewed/`) |
 > Materia: MLOps II (CEIA · FIUBA). Hitos: diseño (Sesión 4) · checkpoint (Sesión 6) · defensa (Sesión 8) · repo una semana después.
 
 **Equipo:** Christian Conchari (individual — confirmar con el docente, el reglamento pide 2–6)
