@@ -28,27 +28,30 @@ x-airflow-common: &airflow-common
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor # LocalExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${PG_USER:-airflow}:${PG_PASSWORD:-airflow}@postgres/${PG_DATABASE:-airflow}
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${PG_USER:-airflow}:${PG_PASSWORD:-airflow}@postgres/${PG_DATABASE:-airflow}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${PG_USER:-airflow}:${PG_PASSWORD:?falta en .env}@postgres/${PG_DATABASE:-airflow}
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${PG_USER:-airflow}:${PG_PASSWORD:?falta en .env}@postgres/${PG_DATABASE:-airflow}
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
     AIRFLOW__CELERY__WORKER_CONCURRENCY: '2'
-    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${PG_USER:-airflow}:${PG_PASSWORD:-airflow}@postgres/${PG_DATABASE:-airflow}
-    AIRFLOW__CORE__FERNET_KEY: '${AIRFLOW_FERNET_KEY:-46BKJvoBr0Ph6r0YS25A_7chFOW_SpyJF3tiWFDBA58=}'
-    AIRFLOW__CORE__SECRET_KEY: '${AIRFLOW_SECRET_KEY:-qt2Edq6LIRdv5k0DDznVOA==}'
-    AIRFLOW__API__SECRET_KEY: '${AIRFLOW_SECRET_KEY:-qt2Edq6LIRdv5k0DDznVOA==}'
-    AIRFLOW__API_AUTH__JWT_SECRET: '${AIRFLOW_API_JWT_SECRET:-qt2Edq6LIRdv5k0DDznVOA==}'
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${PG_USER:-airflow}:${PG_PASSWORD:?falta en .env}@postgres/${PG_DATABASE:-airflow}
+    # Secretos sin valores por defecto: los genera scripts/generar_env.sh en .env (no versionado)
+    AIRFLOW__CORE__FERNET_KEY: '${AIRFLOW_FERNET_KEY:?falta en .env: correr scripts/generar_env.sh}'
+    AIRFLOW__CORE__SECRET_KEY: '${AIRFLOW_SECRET_KEY:?falta en .env: correr scripts/generar_env.sh}'
+    AIRFLOW__API__SECRET_KEY: '${AIRFLOW_SECRET_KEY:?falta en .env: correr scripts/generar_env.sh}'
+    AIRFLOW__API_AUTH__JWT_SECRET: '${AIRFLOW_API_JWT_SECRET:?falta en .env: correr scripts/generar_env.sh}'
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false' # Change to 'false' to remove the tutorials and examples
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'True'
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'False'
     AIRFLOW__SECRETS__BACKEND: airflow.secrets.local_filesystem.LocalFilesystemBackend
     AIRFLOW__SECRETS__BACKEND_KWARGS: '{"variables_file_path": "/opt/secrets/variables.yaml", "connections_file_path": "/opt/secrets/connections.yaml"}'
     AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minio}
-    AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY:-minio123}
+    AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY:?falta en .env}
     AWS_ENDPOINT_URL_S3: http://s3:9000
     MLFLOW_S3_ENDPOINT_URL: http://s3:9000
     MLFLOW_TRACKING_URI: http://mlflow:5000
+    # Los DAGs evalúan y entrenan con los mismos hilos que una réplica de inference
+    TORCH_NUM_THREADS: ${TORCH_NUM_THREADS:-4}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-./airflow}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-./airflow}/logs:/opt/airflow/logs
@@ -57,12 +60,13 @@ x-airflow-common: &airflow-common
     - ${AIRFLOW_PROJ_DIR:-./airflow}/secrets:/opt/secrets
     # Dataset local que sube el DAG registrar_modelo a MinIO
     - ./data:/opt/airflow/data:ro
-    # Set de evaluación revisado (versionado), ver annotations/reviewed/README.md
+    # Sets revisados (versionados): gate y referencia de drift
     - ./annotations:/opt/airflow/annotations:ro
+    # Linaje: el DAG registra el commit de HEAD (solo lectura, sin binario de git)
+    - ./.git:/opt/airflow/repo-git:ro
     # Paquete compartido con la API (detector y servicio)
     - ./vallavision:/opt/airflow/dags/vallavision:ro
   networks:
-    - frontend
     - backend
   user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}"
   depends_on:  &airflow-common-depends-on
@@ -82,14 +86,14 @@ services:
       - mlflow
       - all
     ports:
-      - "${PG_PORT:-5432}:5432"
+      - "127.0.0.1:${PG_PORT:-5432}:5432"
     networks:
       - backend
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_DB=${PG_DATABASE:-airflow}
       - POSTGRES_USER=${PG_USER:-airflow}
-      - POSTGRES_PASSWORD=${PG_PASSWORD:-airflow}
+      - POSTGRES_PASSWORD=${PG_PASSWORD:?falta en .env}
       - POSTGRES_DATABASE=${PG_DATABASE:-airflow}
       - POSTGRES_PORT=${PG_PORT:-5432}
     volumes:
@@ -123,14 +127,13 @@ services:
       - airflow
       - all
     ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_PORT_UI:-9001}:9001"
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_PORT_UI:-9001}:9001"
     networks:
-      - frontend
       - backend
     environment:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minio}
-      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_ACCESS_KEY:-minio123}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_ACCESS_KEY:?falta en .env}
     volumes:
       - minio_data:/data
     command: server /data --console-address :9001
@@ -148,17 +151,22 @@ services:
       - airflow
       - all
     depends_on:
-      - s3
+      s3:
+        condition: service_healthy
     networks:
       - backend
-    entrypoint: >
-      /bin/sh -c '
-      sleep 5;
-      /usr/bin/mc alias set s3 http://s3:9000 ${MINIO_ACCESS_KEY:-minio} ${MINIO_SECRET_ACCESS_KEY:-minio123};
-      /usr/bin/mc mb s3/${MLFLOW_BUCKET_NAME:-mlflow};
-      /usr/bin/mc mb s3/${DATA_REPO_BUCKET_NAME:-data};
-      exit 0;
-      '
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minio}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_ACCESS_KEY:?falta en .env}
+      - INFERENCE_S3_SECRET=${INFERENCE_S3_SECRET:?falta en .env}
+      - GATEWAY_S3_SECRET=${GATEWAY_S3_SECRET:?falta en .env}
+      - STREAM_S3_SECRET=${STREAM_S3_SECRET:?falta en .env}
+      - BUCKET=${DATA_REPO_BUCKET_NAME:-data}
+      - MLFLOW_BUCKET=${MLFLOW_BUCKET_NAME:-mlflow}
+    volumes:
+      - ./dockerfiles/minio:/policies:ro
+    # Buckets + un usuario por servicio con solo los prefijos que necesita (docs/seguridad.md)
+    entrypoint: ["/bin/sh", "/policies/init.sh"]
 
   mlflow:
     restart: always
@@ -172,28 +180,28 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "${MLFLOW_PORT:-5000}:5000"
+      - "127.0.0.1:${MLFLOW_PORT:-5000}:5000"
     networks:
-      - frontend
       - backend
     environment:
-      - MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE=true
       - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minio}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_ACCESS_KEY:-minio123}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_ACCESS_KEY:?falta en .env}
       - MLFLOW_S3_ENDPOINT_URL=http://s3:9000
     command: >
       mlflow server 
-      --backend-store-uri postgresql://${PG_USER:-airflow}:${PG_PASSWORD:-airflow}@postgres:5432/mlflow_db
+      --backend-store-uri postgresql://${PG_USER:-airflow}:${PG_PASSWORD:?falta en .env}@postgres:5432/mlflow_db
       --host 0.0.0.0
       --default-artifact-root s3://${MLFLOW_BUCKET_NAME:-mlflow}/
       --workers 1
+      --allowed-hosts mlflow,mlflow:5000,localhost,localhost:${MLFLOW_PORT:-5000},127.0.0.1,127.0.0.1:${MLFLOW_PORT:-5000}
     healthcheck:
       test: wget --no-verbose --tries=1 --spider http://mlflow:5000 || exit 1
       interval: 60s
       timeout: 10s
       retries: 3
 
-  # Gateway REST: sin modelo ni torch. Valida y reenvía por gRPC al servicio `inference`.
+  # Gateway REST + GraphQL: único servicio expuesto fuera de la máquina. Sin modelo ni torch:
+  # autentica (API key), limita tasa y tamaño, valida y reenvía por gRPC a `inference`.
   gateway:
     restart: always
     build:
@@ -207,24 +215,38 @@ services:
       inference:
         condition: service_started
     ports:
-      - "${FASTAPI_PORT:-8800}:8800"
+      - "${GATEWAY_BIND:-0.0.0.0}:${FASTAPI_PORT:-8800}:8800"
     networks:
       - frontend
       - backend
     environment:
       - INFERENCE_ADDR=inference:50051
+      - INFERENCE_TOKEN=${INFERENCE_TOKEN:?falta en .env}
+      - GATEWAY_API_KEYS=${GATEWAY_API_KEYS:?falta en .env}
+      - GATEWAY_ADMIN_KEYS=${GATEWAY_ADMIN_KEYS:?falta en .env}
+      - GATEWAY_RATE_LIMIT_PER_MIN=${GATEWAY_RATE_LIMIT_PER_MIN:-600}
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      # Usuario de MinIO de solo lectura sobre predictions/ (GraphQL)
+      - AWS_ACCESS_KEY_ID=gateway
+      - AWS_SECRET_ACCESS_KEY=${GATEWAY_S3_SECRET:?falta en .env}
+      - AWS_ENDPOINT_URL_S3=http://s3:9000
+      - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
     healthcheck:
-      # Sin champion responde 503 en /health (esperado antes de correr registrar_modelo):
-      # alcanza con que el proceso conteste
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8800/docs', timeout=5)"]
-      interval: 60s
+      # Sano si alcanza a `inference` (tenga o no champion); /health dice si hay modelo
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8800/livez', timeout=5)"]
+      interval: 30s
       timeout: 10s
       start_period: 20s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
 
-  # Servicio de inferencia: único dueño del modelo (gRPC). Por defecto una réplica en el
-  # puerto fijo 50051. Para escalar, ver docker-compose.scale.yaml (sin container_name, para
-  # poder tener varias réplicas; el gateway las alcanza por DNS).
+  # Servicio de inferencia: único dueño del modelo (gRPC). Solo en la red interna y con token.
+  # Por defecto una réplica, publicada en 127.0.0.1:50051 para los scripts locales. Para escalar,
+  # ver docker-compose.scale.yaml (sin container_name, para poder tener varias réplicas).
   inference:
     restart: always
     build:
@@ -236,35 +258,134 @@ services:
     depends_on:
       mlflow:
         condition: service_healthy
+      s3:
+        condition: service_healthy
+      create_s3_buckets:
+        condition: service_completed_successfully
     ports:
-      - "50051:50051"
+      - "127.0.0.1:50051:50051"
     networks:
-      - frontend
       - backend
     environment:
-      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minio}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_ACCESS_KEY:-minio123}
+      # Usuario de MinIO: lee models/ y referencias, escribe predictions/ y raw/stream/
+      - AWS_ACCESS_KEY_ID=inference
+      - AWS_SECRET_ACCESS_KEY=${INFERENCE_S3_SECRET:?falta en .env}
       - AWS_ENDPOINT_URL_S3=http://s3:9000
       - MLFLOW_S3_ENDPOINT_URL=http://s3:9000
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
+      - INFERENCE_TOKEN=${INFERENCE_TOKEN:?falta en .env}
+      # Fracción de imágenes que se guardan en raw/stream/ (reetiquetado si hay drift)
+      - PERSIST_IMAGES_RATIO=${PERSIST_IMAGES_RATIO:-0.1}
       # Un forward a la vez por réplica; el paralelismo viene de las réplicas
       - INFERENCE_CONCURRENCY=${INFERENCE_CONCURRENCY:-1}
       - TORCH_NUM_THREADS=${TORCH_NUM_THREADS:-4}
     command: python -m vallavision.grpc_server
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 50051), 3)"]
-      interval: 60s
+      # Sano solo con el champion cargado (antes de correr registrar_modelo queda unhealthy)
+      test: ["CMD", "python", "-m", "vallavision.healthcheck"]
+      interval: 30s
       timeout: 10s
-      start_period: 30s
+      start_period: 60s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "${INFERENCE_CPUS:-4}"
+          memory: 3G
+
+  # Broker de streaming (API de Kafka). Topic `frames`: clave = cámara, valor = JPEG.
+  redpanda:
+    restart: always
+    image: redpandadata/redpanda:v24.2.7
+    container_name: redpanda
+    profiles:
+      - streaming
+      - all
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "127.0.0.1:19092:19092"
+    networks:
+      - backend
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
+      interval: 15s
+      timeout: 10s
+      start_period: 20s
+      retries: 5
+
+  # Consumidor: Redpanda → inference → ventanas por event time → curated/stream_windows/
+  stream-consumer:
+    restart: always
+    build:
+      context: .
+      dockerfile: dockerfiles/stream/Dockerfile
+    image: backend_stream
+    profiles:
+      - streaming
+      - all
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      inference:
+        condition: service_started
+    networks:
+      - backend
+    environment:
+      - KAFKA_BOOTSTRAP=redpanda:9092
+      - INFERENCE_ADDR=inference:50051
+      - INFERENCE_TOKEN=${INFERENCE_TOKEN:?falta en .env}
+      - AWS_ACCESS_KEY_ID=stream
+      - AWS_SECRET_ACCESS_KEY=${STREAM_S3_SECRET:?falta en .env}
+      - AWS_ENDPOINT_URL_S3=http://s3:9000
+      - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
+      - WINDOW_MS=${STREAM_WINDOW_MS:-15000}
+      - ALLOWED_LATENESS_MS=${STREAM_ALLOWED_LATENESS_MS:-2000}
+      - LATENCY_SLO_MS=${STREAM_LATENCY_SLO_MS:-2000}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
+  # Revisión de etiquetas (scripts/revision_etiquetas.py). Solo con --profile labeling.
+  label-studio:
+    image: heartexlabs/label-studio:1.23.1
+    container_name: label_studio
+    profiles:
+      - labeling
+    ports:
+      - "127.0.0.1:${LABEL_STUDIO_PORT:-8090}:8080"
+    networks:
+      - frontend
+    environment:
+      - LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
+      - LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/datasets
+      - LABEL_STUDIO_USERNAME=${LABEL_STUDIO_USERNAME:-admin@vallavision.local}
+      - LABEL_STUDIO_PASSWORD=${LABEL_STUDIO_PASSWORD:?falta en .env}
+      - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=true
+    volumes:
+      - ./data:/datasets:ro
+      - label_studio_data:/label-studio/data
 
   airflow-apiserver:
     <<: *airflow-common
     container_name: airflow-apiserver
     command: api-server --workers 1
     ports:
-      - "${AIRFLOW_PORT:-8080}:8080"
+      - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
       interval: 60s
@@ -447,7 +568,7 @@ services:
       _AIRFLOW_DB_MIGRATE: 'true'
       _AIRFLOW_WWW_USER_CREATE: 'true'
       _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:?falta en .env}
       _PIP_ADDITIONAL_REQUIREMENTS: ''
     user: "0:0"
 
@@ -460,3 +581,5 @@ networks:
 volumes:
   db_data:
   minio_data:
+  redpanda_data:
+  label_studio_data:

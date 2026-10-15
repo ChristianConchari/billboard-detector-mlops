@@ -6,10 +6,12 @@ Requiere el stack arriba y un champion registrado. Genera el código gRPC antes:
 
 `-c` acepta varias concurrencias: con cada una se lanzan `-n` requests desde N hilos y se mide
 el throughput (req/s) además de p50/p95. REST apunta al gateway y gRPC directo a inference.
+La API key del gateway y el token de inference se leen de `.env`.
 """
 
 import argparse
 import base64
+import os
 import statistics
 import sys
 import threading
@@ -23,6 +25,17 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from vallavision.grpc_gen import detector_pb2 as pb  # noqa: E402
 from vallavision.grpc_gen import detector_pb2_grpc as pb_grpc  # noqa: E402
+
+
+def env(name):
+    if os.getenv(name):
+        return os.getenv(name)
+    path = Path(__file__).resolve().parent.parent / ".env"
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if line.startswith(f"{name}="):
+                return line.split("=", 1)[1].strip()
+    return None
 
 
 def percentile(ms, q):
@@ -55,17 +68,21 @@ def main():
     data = Path(args.image).read_bytes()
 
     stub = pb_grpc.DetectorStub(grpc.insecure_channel(args.grpc))
+    token = env("INFERENCE_TOKEN")
+    metadata = [("authorization", f"Bearer {token}")] if token else None
+    api_key = (env("GATEWAY_API_KEYS") or "").split(",")[0]
     req = pb.DetectRequest(image=data)
     local = threading.local()
 
     def rest():
         if not hasattr(local, "s"):
             local.s = requests.Session()
-        r = local.s.post(f"{args.rest}/v1/detect", files={"image": ("i.jpg", data, "image/jpeg")})
+        r = local.s.post(f"{args.rest}/v1/detect", files={"image": ("i.jpg", data, "image/jpeg")},
+                         headers={"X-API-Key": api_key})
         r.raise_for_status()
 
     def grpc_call():
-        stub.Detect(req)
+        stub.Detect(req, metadata=metadata)
 
     rest(), grpc_call()  # calentamiento
     print(f"{'protocolo':10}{'c':>3}{'req/s':>9}{'p50 ms':>10}{'p95 ms':>10}")

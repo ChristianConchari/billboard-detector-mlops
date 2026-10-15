@@ -1,11 +1,21 @@
-"""DAG monitoreo_drift: predictions/ recientes vs la referencia del champion.
+"""DAG monitoreo_drift: predicciones del intervalo vs la referencia del champion.
 
-Lee las predicciones de las últimas `window_hours` horas (las que guardan REST y gRPC),
-compara sus features con la referencia calculada sobre `val` por `registrar_modelo` y
-deja un reporte en monitoring/drift/. Si hay drift la tarea falla (alerta visible en
-Airflow). Contrato en docs/contrato.md §5.
+1. `compactar`: lee las predicciones del intervalo de datos de la corrida
+   (`data_interval_start`–`data_interval_end`, así re-ejecutar un run pasado analiza la misma
+   ventana) y deja sus features en un solo Parquet en `curated/predictions/` (evita leer miles
+   de JSON chicos dos veces y no pasa los datos por XCom). Solo entran las del champion y con el
+   umbral calibrado: un cliente que pide otro umbral no puede disparar una alarma.
+2. `comparar`: chi² (conteo de detecciones) y KS (continuas) con corrección de Holm contra la
+   referencia (`val` revisado) → reporte en `monitoring/drift/`.
+3. `accionar`: si hay drift, escribe una alerta en `monitoring/alerts/` y un manifiesto de
+   reetiquetado en `curated/relabel/` con las imágenes guardadas del intervalo (para Label
+   Studio) y falla con `DriftDetected`. Un error técnico falla con otra excepción; el callback
+   deja la alerta con `kind` distinto en cada caso.
+
+Contrato en docs/contrato.md §5.
 """
 
+import io
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -17,10 +27,61 @@ MODEL_NAME = "billboard-detector"
 MLFLOW_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
 
 
+class DriftDetected(Exception):
+    """Hay drift: no es un error técnico (el callback lo distingue)."""
+
+
 def _s3():
     import boto3
 
     return boto3.client("s3", endpoint_url=os.getenv("AWS_ENDPOINT_URL_S3", "http://s3:9000"))
+
+
+def _write_alert(kind, message, **extra):
+    now = datetime.now(timezone.utc)
+    alert = {"kind": kind, "message": message, "created_at": now.isoformat(), **extra}
+    key = f"monitoring/alerts/{now:%Y-%m-%dT%H%M%S}-{kind}.json"
+    _s3().put_object(Bucket=BUCKET, Key=key, Body=json.dumps(alert, indent=2).encode())
+    print(f"ALERTA [{kind}] {message} → s3://{BUCKET}/{key}")
+    return key
+
+
+def _drift_alert_exists(run_id):
+    s3 = _s3()
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix="monitoring/alerts/"):
+        for obj in page.get("Contents", []):
+            if obj["Key"].endswith("-drift.json"):
+                alert = json.loads(s3.get_object(Bucket=BUCKET, Key=obj["Key"])["Body"].read())
+                if alert.get("run_id") == run_id:
+                    return True
+    return False
+
+
+def _alert_on_failure(context):
+    """Alerta `error` en monitoring/alerts/ si la tarea falló por un problema técnico.
+
+    El drift no pasa por acá como error: `accionar` ya dejó su alerta `drift` con el run_id.
+    (En Airflow 3 el callback no siempre recibe la excepción, por eso se mira la alerta.)
+    """
+    ti = context["ti"]
+    exc = context.get("exception")
+    try:
+        if type(exc).__name__ == "DriftDetected" or _drift_alert_exists(ti.run_id):
+            return
+        message = f"{type(exc).__name__}: {exc}" if exc else f"falló la tarea {ti.task_id} (ver su log)"
+        _write_alert("error", message, dag_id=ti.dag_id, task_id=ti.task_id, run_id=ti.run_id)
+    except Exception as e:  # noqa: BLE001 — la alerta no puede tapar el error original
+        print(f"no se pudo guardar la alerta: {e}")
+
+
+def _window(params):
+    """[inicio, fin) de la corrida: el intervalo de datos, o `window_hours` si es manual."""
+    ctx = get_current_context()
+    start, end = ctx.get("data_interval_start"), ctx.get("data_interval_end")
+    if start is None or end is None or start == end:
+        end = ctx.get("run_after") or datetime.now(timezone.utc)
+        start = end - timedelta(hours=int(params["window_hours"]))
+    return start, end
 
 
 @dag(
@@ -28,10 +89,16 @@ def _s3():
     schedule="@hourly",
     start_date=datetime(2026, 1, 1),
     catchup=False,
+    max_active_runs=1,
     tags=["vallavision", "monitoreo"],
+    default_args={"on_failure_callback": _alert_on_failure},
     params={
-        "window_hours": Param(1, type="integer", minimum=1, description="Horas de predicciones a analizar"),
-        "alpha": Param(0.01, type="number", minimum=0, maximum=1, description="Nivel del test KS"),
+        "window_hours": Param(1, type="integer", minimum=1,
+                              description="Horas a analizar en corridas manuales (sin intervalo de datos)"),
+        "alpha": Param(0.01, type="number", minimum=0, maximum=1,
+                       description="Error por familia (Holm) de los 4 tests"),
+        "thin": Param(1, type="integer", minimum=1,
+                      description="Quedarse con 1 de cada k frames (atenúa la autocorrelación)"),
         "fail_on_drift": Param(True, type="boolean", description="Fallar la ejecución si hay drift"),
     },
     doc_md=__doc__,
@@ -39,58 +106,102 @@ def _s3():
 def monitoreo_drift():
 
     @task
-    def leer_predicciones():
-        """Features por frame de predictions/ en la ventana, solo de la versión champion."""
+    def compactar():
+        """predictions/ del intervalo → curated/predictions/…/<inicio>.parquet (features por frame)."""
         import mlflow
+        import pandas as pd
         from mlflow.tracking import MlflowClient
         from vallavision import drift
 
         params = get_current_context()["params"]
+        start, end = _window(params)
         mlflow.set_tracking_uri(MLFLOW_URI)
         mv = MlflowClient().get_model_version_by_alias(MODEL_NAME, "champion")
-        version = mv.version
         # La referencia se guarda por versión de los pesos en MinIO (v<N>), que no es la
         # versión de MLflow: se llega a ella por el tag weights_uri
         weights_version = mv.tags["weights_uri"].rstrip("/").rsplit("/v", 1)[1]
-
+        ref_key = f"curated/reference/{MODEL_NAME}/v{weights_version}.json"
         s3 = _s3()
-        since = datetime.now(timezone.utc) - timedelta(hours=int(params["window_hours"]))
-        frames = []
-        for day in {since.date(), datetime.now(timezone.utc).date()}:
+        reference = json.loads(s3.get_object(Bucket=BUCKET, Key=ref_key)["Body"].read())
+
+        rows, skipped = [], 0
+        day = start.date()
+        while day <= end.date():
             prefix = f"predictions/date={day:%Y-%m-%d}/"
             for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=prefix):
                 for obj in page.get("Contents", []):
-                    if obj["LastModified"] < since:
+                    if not start <= obj["LastModified"] < end:
                         continue
                     rec = json.loads(s3.get_object(Bucket=BUCKET, Key=obj["Key"])["Body"].read())
-                    if rec["model"]["version"] != version or "image_stats" not in rec:
+                    if rec["model"]["version"] != mv.version or not drift.usable_for_drift(
+                            rec, reference.get("score_threshold")):
+                        skipped += 1
                         continue
-                    frames.append(drift.frame_features(rec["detections"], rec["image_stats"]))
-        print(f"{len(frames)} predicciones de la versión {version} desde {since:%F %T}")
-        return {"version": version, "weights_version": weights_version, "frames": frames}
+                    rows.append({"request_id": rec["request_id"], "created_at": rec.get("created_at"),
+                                 "image_key": rec.get("image_key"),
+                                 **drift.frame_features(rec["detections"], rec["image_stats"])})
+            day += timedelta(days=1)
+
+        key = (f"curated/predictions/model=v{mv.version}/date={start:%Y-%m-%d}/"
+               f"{start:%H%M%S}-{end:%H%M%S}.parquet")
+        buf = io.BytesIO()
+        pd.DataFrame(rows, columns=["request_id", "created_at", "image_key", *drift.FEATURES]) \
+            .sort_values("created_at").to_parquet(buf, index=False)
+        s3.put_object(Bucket=BUCKET, Key=key, Body=buf.getvalue())
+        print(f"{len(rows)} predicciones de v{mv.version} en [{start:%F %T}, {end:%F %T}) "
+              f"(descartadas {skipped}: otra versión o umbral no calibrado) → {key}")
+        return {"version": mv.version, "parquet": key, "reference": ref_key, "n_frames": len(rows),
+                "start": start.isoformat(), "end": end.isoformat()}
 
     @task
     def comparar(datos):
+        import pandas as pd
         from vallavision import drift
 
         params = get_current_context()["params"]
         s3 = _s3()
-        key = f"curated/reference/{MODEL_NAME}/v{datos['weights_version']}.json"
-        reference = json.loads(s3.get_object(Bucket=BUCKET, Key=key)["Body"].read())
-        result = drift.compare(reference, datos["frames"], alpha=float(params["alpha"]))
-        report = {"model_version": datos["version"], "reference": key,
-                  "created_at": datetime.now(timezone.utc).isoformat(), **result}
+        reference = json.loads(s3.get_object(Bucket=BUCKET, Key=datos["reference"])["Body"].read())
+        df = pd.read_parquet(io.BytesIO(s3.get_object(Bucket=BUCKET, Key=datos["parquet"])["Body"].read()))
+        frames = [{f: (None if pd.isna(r[f]) else r[f]) for f in drift.FEATURES} for _, r in df.iterrows()]
+        frames = drift.thin(frames, int(params["thin"]))
+        result = drift.compare(reference, frames, alpha=float(params["alpha"]))
+        report = {"model_version": datos["version"], "reference": datos["reference"],
+                  "window": [datos["start"], datos["end"]], "features": datos["parquet"],
+                  "thin": int(params["thin"]), "created_at": datetime.now(timezone.utc).isoformat(), **result}
         out = f"monitoring/drift/{datetime.now(timezone.utc):%Y-%m-%dT%H%M%S}.json"
         s3.put_object(Bucket=BUCKET, Key=out, Body=json.dumps(report, indent=2).encode())
         print(json.dumps(report, indent=2))
         print(f"reporte: s3://{BUCKET}/{out}")
-        if result["drift"] and params["fail_on_drift"]:
-            flagged = [f for f, m in result["metrics"].items() if m.get("drift")]
-            raise RuntimeError(f"drift detectado en: {', '.join(flagged)}")
         if result["drift"] is None:
             print(f"muy pocas predicciones ({result['n_frames']} < {drift.MIN_FRAMES}): sin veredicto")
+        return {"report": out, "drift": result["drift"],
+                "flagged": [f for f, m in result["metrics"].items() if m.get("drift")]}
 
-    comparar(leer_predicciones())
+    @task
+    def accionar(datos, resultado):
+        """Con drift: alerta + manifiesto de reetiquetado con las imágenes guardadas del intervalo."""
+        import pandas as pd
+
+        if not resultado["drift"]:
+            return None
+        s3 = _s3()
+        df = pd.read_parquet(io.BytesIO(s3.get_object(Bucket=BUCKET, Key=datos["parquet"])["Body"].read()))
+        images = [k for k in df["image_key"].dropna().tolist() if k]
+        now = datetime.now(timezone.utc)
+        manifest = {"reason": f"drift en {', '.join(resultado['flagged'])}", "report": resultado["report"],
+                    "model_version": datos["version"], "window": [datos["start"], datos["end"]],
+                    "images": images, "created_at": now.isoformat()}
+        key = f"curated/relabel/{now:%Y-%m-%dT%H%M%S}.json"
+        s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(manifest, indent=2).encode())
+        print(f"{len(images)} imágenes para reetiquetar → s3://{BUCKET}/{key}")
+        _write_alert("drift", manifest["reason"], report=resultado["report"], relabel=key,
+                     model_version=datos["version"], run_id=get_current_context()["run_id"])
+        if get_current_context()["params"]["fail_on_drift"]:
+            raise DriftDetected(f"drift en {', '.join(resultado['flagged'])}; reetiquetado: {key}")
+        return key
+
+    datos = compactar()
+    accionar(datos, comparar(datos))
 
 
 monitoreo_drift()

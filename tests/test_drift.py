@@ -45,3 +45,40 @@ def test_pocos_frames_sin_veredicto():
 def test_percentile():
     assert drift.percentile(list(range(1, 101)), 95) == 95
     assert drift.percentile([], 95) is None
+
+
+def test_conteo_usa_chi2_y_detecta_mas_detecciones():
+    ref = drift.build_reference(frames(200, 0.5, seed=1))
+    cur = [{**f, "n_detections": 3} for f in frames(60, 0.5, seed=2)]
+    res = drift.compare(ref, cur)
+    assert res["metrics"]["n_detections"]["test"] == "chi2"
+    assert res["metrics"]["n_detections"]["drift"] is True
+    assert res["metrics"]["brightness"]["test"] == "ks"
+
+
+def test_holm_controla_comparaciones_multiples():
+    # p = 0.004 sola rechaza a 0.01, pero con 4 tests Holm exige ≤ 0.0025 para la menor
+    assert drift.holm({"a": 0.004, "b": 0.5, "c": 0.6, "d": 0.9}, 0.01) == \
+        {"a": False, "b": False, "c": False, "d": False}
+    assert drift.holm({"a": 0.001, "b": 0.003, "c": 0.6, "d": 0.9}, 0.01) == \
+        {"a": True, "b": True, "c": False, "d": False}
+
+
+def test_falsas_alarmas_bajo_h0_acotadas():
+    # 200 ventanas de la misma distribución: con Holm a alpha=0.01 casi nunca hay alarma
+    ref = drift.build_reference(frames(300, 0.5, seed=1))
+    alarms = sum(drift.compare(ref, frames(40, 0.5, seed=s))["drift"] for s in range(100, 300))
+    assert alarms <= 6
+
+
+def test_solo_umbral_calibrado_sirve_para_drift():
+    base = {"image_stats": {"brightness": 0.5, "contrast": 0.2}}
+    assert drift.usable_for_drift({**base, "threshold_is_default": True, "score_threshold": 0.1502}, 0.1502)
+    assert not drift.usable_for_drift({**base, "threshold_is_default": False, "score_threshold": 0.9}, 0.1502)
+    assert not drift.usable_for_drift(base)  # registro viejo sin el campo
+    assert not drift.usable_for_drift({"threshold_is_default": True})
+
+
+def test_thin():
+    assert drift.thin(list(range(10)), 3) == [0, 3, 6, 9]
+    assert drift.thin([1, 2], 1) == [1, 2]

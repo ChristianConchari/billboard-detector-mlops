@@ -23,15 +23,18 @@ class FakeDetector:
 @pytest.fixture
 def service():
     s = DetectionService()
-    s.detector = FakeDetector()
-    s.info = {"name": "billboard-detector", "version": "1", "alias": "champion",
-              "labels": ["billboard"], "score_threshold": 0.15, "metrics": {}}
+    s.set_model(FakeDetector(), {"name": "billboard-detector", "version": "1", "alias": "champion",
+                                 "labels": ["billboard"], "score_threshold": 0.15, "metrics": {}})
     return s
 
 
 def png(size=(64, 32)):
+    return encoded(size, "PNG")
+
+
+def encoded(size, fmt, **save_kw):
     buf = io.BytesIO()
-    Image.new("RGB", size).save(buf, "PNG")
+    Image.new("RGB", size, "red").save(buf, fmt, **save_kw)
     return buf.getvalue()
 
 
@@ -47,6 +50,21 @@ def test_ok_usa_umbral_calibrado(service):
     assert [d["score"] for d in r["detections"]] == [0.9, 0.3]  # 0.1 < 0.15
     assert r["model"]["alias"] == "champion"
     assert set(r["image_stats"]) == {"brightness", "contrast"}
+    # Campos de monitoreo: el umbral efectivo queda registrado para filtrar el drift
+    assert r["score_threshold"] == 0.15 and r["threshold_is_default"] is True
+    assert r["latency_ms"] >= r["inference_ms"] >= 0
+
+
+def test_umbral_explicito_queda_registrado(service):
+    r = service.detect(png(), score_threshold=0.5)
+    assert r["score_threshold"] == 0.5 and r["threshold_is_default"] is False
+
+
+def test_latencia_incluye_la_espera(service):
+    import time
+
+    r = service.detect(png(), received_at=time.perf_counter() - 0.2)
+    assert r["latency_ms"] >= 200
 
 
 def test_umbral_explicito(service):
@@ -60,6 +78,59 @@ def test_umbral_invalido_422(service, value):
 
 def test_tipo_no_soportado_415(service):
     assert status_of(service, b"GIF89a", content_type="image/gif") == 415
+
+
+@pytest.mark.parametrize("fmt", ["GIF", "BMP", "TIFF"])
+def test_formato_real_no_soportado_415_aunque_declare_jpeg(service, fmt):
+    # El tipo declarado por el cliente no alcanza: se mira el formato real
+    assert status_of(service, encoded((32, 32), fmt), content_type="image/jpeg") == 415
+    assert status_of(service, encoded((32, 32), fmt)) == 415  # gRPC no manda tipo
+
+
+def test_bomba_de_descompresion_422_sin_decodificar(service):
+    # 20000x20000 en un PNG de pocos KB: PIL la marca como bomba al abrirla
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("1", (20000, 20000)).save(buf, "PNG")
+    assert status_of(service, buf.getvalue()) == 422
+
+
+def test_dimensiones_se_validan_antes_de_decodificar(service, monkeypatch):
+    from PIL import ImageFile
+
+    def no_decodificar(self):
+        raise AssertionError("decodificó una imagen fuera de rango")
+
+    monkeypatch.setattr(ImageFile.ImageFile, "load", no_decodificar)
+    assert status_of(service, png((5000, 8))) == 422
+
+
+def test_orientacion_exif(service):
+    from PIL import Image
+
+    exif = Image.Exif()
+    exif[0x0112] = 6  # rotada 90°: se ve como 32x64
+    data = encoded((64, 32), "JPEG", exif=exif.tobytes())
+    assert service.detect(data)["image"] == {"width": 32, "height": 64}
+
+
+def test_persist_guarda_muestra_de_imagenes():
+    class S3:
+        def __init__(self):
+            self.keys = []
+
+        def put_object(self, Bucket, Key, Body, **kw):
+            self.keys.append(Key)
+
+    s = DetectionService(persist_images_ratio=1.0)
+    s._s3 = S3()
+    s.persist({"request_id": "r1", "image_format": "PNG"}, b"img")
+    assert [k.split("/")[0] for k in s._s3.keys] == ["raw", "predictions"]
+    assert s._s3.keys[0].endswith("/r1.png")
+    s.persist_images_ratio = 0.0
+    s.persist({"request_id": "r2", "image_format": "PNG"}, b"img")
+    assert s._s3.keys[-1].startswith("predictions/")
 
 
 def test_demasiado_grande_413(service):

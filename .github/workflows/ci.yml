@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencias de los tests (sin el stack)
+        run: pip install -r requirements-dev.txt
+      - name: Tests
+        run: pytest -q tests
+      - name: Los DAGs compilan
+        run: python -m py_compile airflow/dags/*.py
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose config con un .env generado
+        run: |
+          scripts/generar_env.sh
+          docker compose --profile all --profile labeling config -q
+          docker compose -f docker-compose.yaml -f docker-compose.scale.yaml --profile all config -q

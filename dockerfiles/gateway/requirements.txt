@@ -1,5 +1,11 @@
-fastapi>=0.116
-uvicorn>=0.27
-python-multipart>=0.0.9
-grpcio>=1.60
-protobuf>=5
+# Versiones fijas (las de la imagen probada). protobuf 6.x: el mismo runtime que inference
+fastapi==0.143.1
+starlette==1.8.0
+pydantic==2.14.1
+uvicorn==0.54.0
+python-multipart==0.0.32
+grpcio==1.84.0
+protobuf==6.33.6
+strawberry-graphql==0.335.0
+graphql-core==3.3.0
+boto3==1.43.114

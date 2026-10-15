@@ -167,3 +167,6 @@ data/
 
 # Código generado desde proto/detector.proto (scripts/gen_proto.sh; el Dockerfile lo regenera)
 vallavision/grpc_gen/
+
+# Secretos locales: se generan con scripts/generar_env.sh desde .env.example
+.env

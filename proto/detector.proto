@@ -7,7 +7,11 @@ service Detector {
   // Una imagen → sus detecciones.
   rpc Detect(DetectRequest) returns (DetectResponse);
   // Un lote de frames → una respuesta por frame, a medida que se infieren (server-streaming).
+  // Un frame inválido no corta el lote: su respuesta trae `error`.
   rpc DetectStream(DetectBatchRequest) returns (stream DetectResponse);
+  // Streaming bidireccional: el cliente manda frames a medida que los produce y recibe una
+  // respuesta por frame, en orden. Sin límite de lote (cada mensaje es un frame).
+  rpc DetectLive(stream DetectRequest) returns (stream DetectResponse);
   // Modelo cargado en este servidor (lo usa el gateway para /health y /v1/model).
   rpc GetModel(GetModelRequest) returns (ModelInfo);
   // Fuerza la búsqueda del champion en MLflow; devuelve el modelo resultante.
@@ -17,6 +21,7 @@ service Detector {
 message DetectRequest {
   bytes image = 1;                    // JPEG o PNG, ≤ 5 MB, lado mayor ≤ 4096 px
   optional float score_threshold = 2; // 0.0–1.0; sin valor usa el umbral calibrado del modelo
+  string frame_id = 3;                // opcional; se devuelve igual en la respuesta
 }
 
 message DetectBatchRequest {
@@ -45,7 +50,14 @@ message DetectResponse {
   ModelRef model = 2;
   ImageSize image = 3;
   repeated Detection detections = 4; // ordenadas por score descendente
-  float latency_ms = 5;
+  float latency_ms = 5;                 // en el servidor: espera de turno + decodificado + forward
+  string frame_id = 6;                  // el de la request
+  Error error = 7;                      // solo en DetectStream/DetectLive, si el frame es inválido
+}
+
+message Error {
+  int32 status = 1;   // código HTTP del contrato (413/415/422)
+  string message = 2;
 }
 
 message GetModelRequest {}
@@ -57,5 +69,7 @@ message ModelInfo {
   ModelRef model = 2;
   repeated string labels = 3;
   float score_threshold = 4;        // umbral calibrado por defecto
-  map<string, double> metrics = 5;  // métricas de evaluación del run de MLflow
+  map<string, double> metrics = 5;  // métricas del gate (gate_map, gate_map_50, IC 95 %)
+  string eval_set = 6;              // set sobre el que se midieron, p. ej. reviewed/test.json@<sha>
+  string weights_uri = 7;           // s3://data/models/billboard-detector/v<N>/ (ubica la referencia de drift)
 }

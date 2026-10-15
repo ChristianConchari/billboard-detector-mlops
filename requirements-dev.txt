@@ -1,0 +1,17 @@
+# Tests sin el stack (pytest tests)
+pytest==9.1.1
+fastapi==0.143.1
+starlette==1.8.0
+httpx==0.28.1
+python-multipart==0.0.32
+grpcio==1.84.0
+grpcio-tools==1.81.1
+protobuf==6.33.6
+strawberry-graphql==0.335.0
+graphql-core==3.3.0
+boto3==1.43.114
+numpy==2.5.4
+scipy==1.18.1
+pillow==12.3.0
+pycocotools==2.0.11
+kafka-python==3.0.11

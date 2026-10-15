@@ -1,79 +1,95 @@
 # Arquitectura y decisiones
 
-Resumen para la defensa. El contrato de datos está en [contrato.md](contrato.md) y el alcance
-original en [alcance.md](alcance.md).
+Resumen para la defensa. El contrato está en [contrato.md](contrato.md), los controles de seguridad en
+[seguridad.md](seguridad.md) y el diseño original (Hito #1) en [alcance.md](alcance.md).
 
 ## Flujo
 
 ```mermaid
 flowchart LR
     GH[GitHub release<br/>model-v1] -->|gh:// + SHA-256| REG
-    DS[(dataset local<br/>data/)] --> REG
+    DS[(dataset local<br/>data/ + annotations/reviewed/)] --> REG
     subgraph Airflow
         REG[registrar_modelo]
+        RB[rollback_modelo]
         MON[monitoreo_drift<br/>@hourly]
     end
-    REG -->|pesos v&lt;N&gt;, dataset, referencia| S3[(MinIO<br/>bucket data)]
-    REG -->|modelo + métricas + alias| ML[MLflow Registry]
-    ML -->|alias champion| SRV
-    S3 -->|pesos| SRV
-    subgraph SRV[Servicio de inferencia]
-        REST[Gateway REST<br/>:8800 · sin modelo] -->|gRPC| GRPC[inference<br/>:50051 · modelo + torch<br/>réplicas con --scale]
-    end
-    C1[cliente REST] --> REST
-    C2[stream_client.py<br/>cámara simulada] --> GRPC
-    GRPC -->|predictions/| S3
+    REG -->|pesos v&lt;N&gt;, sets con sha, referencia| S3[(MinIO<br/>bucket data)]
+    REG -->|modelo, evaluaciones, linaje, alias| ML[MLflow]
+    RB -->|champion ↔ anterior| ML
+    ML -->|alias champion + sha256| INF
+    S3 -->|pesos verificados| INF
+    C1[cliente REST / GraphQL] -->|X-API-Key| GW[Gateway :8800<br/>sin modelo]
+    GW -->|gRPC + token| INF[inference :50051<br/>modelo + torch<br/>réplicas con --scale]
+    CAM[camara_productor.py] -->|topic frames| RP[(Redpanda)]
+    RP --> SC[stream-consumer<br/>ventanas por event time]
+    SC -->|gRPC + token| INF
+    SC -->|curated/stream_windows/, alertas| S3
+    INF -->|predictions/, raw/stream/| S3
     S3 -->|predictions/ + referencia| MON
-    MON -->|monitoring/drift/| S3
+    MON -->|reporte, alerta, reetiquetado| S3
 ```
 
 ## Decisiones
 
 | Decisión | Elegido | Por qué |
 |---|---|---|
-| Promoción de modelos | **Aliases** de MLflow 3 (`champion`/`challenger`) | Las *stages* están deprecadas en MLflow 3 |
-| Carga en el servicio | `BillboardDetector` directo desde MinIO, no `pyfunc.load_model` | Hace falta controlar latencia, umbral y tamaño por request |
-| Código compartido | Paquete `vallavision/` en la raíz, montado en Airflow y copiado a la imagen de la API | Lo que se evalúa es exactamente lo que se sirve |
-| Separación gateway / inferencia | REST en un gateway sin torch; el modelo vive solo en `inference` (gRPC) | Una sola copia del modelo por réplica, imagen de borde liviana, escalado independiente y lugar para la seguridad de la Sesión 7 |
-| Validación | Chequeos baratos en el gateway; decodificado y dimensiones en `inference` (`validation.py` compartido) | El gateway no decodifica imágenes y los clientes gRPC directos quedan igual de protegidos |
-| Umbral por defecto | El calibrado sobre validación (`calibration.json`, 0.15), no un valor fijo | Viaja con el checkpoint y es el que maximiza F1 |
-| Fuente de pesos | `gh://owner/repo@tag/asset.zip` con verificación SHA-256 | Reproducible sin pasos manuales ni credenciales |
-| Idempotencia | Mismos pesos (sha256) → misma `v<N>` y misma versión de MLflow | Re-ejecutar el DAG no duplica nada |
-| Drift | Test KS de dos muestras por feature (α = 0,01) contra el `val` revisado | Sin supuestos de distribución y sin entrenar nada |
-| Set de evaluación | `val` con cajas revisadas del entrenamiento del modelo, versionado en `annotations/reviewed/` | El `val` del export no es comparable: split por video distinto y cajas sin revisar |
-| Persistencia de predicciones | Best-effort: si MinIO falla no se rompe la request | La inferencia no depende del monitoreo |
+| Promoción de modelos | **Aliases** de MLflow 3 (`champion`, `challenger`, `anterior`) | Las *stages* están deprecadas; `anterior` hace el rollback de un paso |
+| Set del gate | `test` revisado (95 imágenes, 7 videos) | No intervino en el entrenamiento ni en la calibración del umbral; el `val` revisado sí (por eso daba 0,817, optimista) |
+| Comparación contra el champion | Re-evaluarlo sobre el mismo set (o reutilizar una evaluación con el mismo sha256 del set) y exigir una mejora ≥ 0,01 | Comparar métricas de sets distintos no dice nada; un empate dentro del ruido no justifica cambiar el modelo |
+| Incertidumbre | IC 95 % del mAP por bootstrap de imágenes, publicado con la métrica | Con 95 imágenes el IC mide ±0,05: hay que mostrarlo |
+| Linaje | Cada evaluación es un run (`evaluaciones`) con el set como artefacto, su sha256, el hash del código y el commit; la versión del modelo apunta a su última evaluación | Reproducir "qué datos y qué código dieron esta métrica" sin depender de paths mutables |
+| Integridad de pesos | SHA-256 del zip del release obligatorio; SHA-256 del checkpoint en MLflow, verificado por inference al cargar | Un peso alterado en el lake no llega a servirse |
+| Carga en el servicio | `BillboardDetector` desde MinIO, no `pyfunc.load_model` | Controlar umbral, hilos y latencia por request; el pyfunc queda registrado para consumo externo |
+| Código compartido | Paquete `vallavision/` montado en Airflow y copiado a las imágenes | Lo que se evalúa es exactamente lo que se sirve |
+| Separación gateway / inferencia | REST + GraphQL en un gateway sin torch; el modelo solo en `inference` (gRPC) | Una copia del modelo por réplica, borde liviano, escalado independiente y un lugar para autenticación y límites |
+| Validación | Baratos en el gateway; formato real, dimensiones (antes de decodificar) y EXIF en inference | Los clientes gRPC directos quedan igual de protegidos |
+| Umbral por defecto | El calibrado (`calibration.json`, 0,15) | Viaja con el checkpoint |
+| Streaming | Redpanda + consumidor con ventanas tumbling por event time y watermark; además `DetectLive` bidireccional | El broker desacopla cámaras de inferencia y ordena por cámara (partición); el event time hace las ventanas reproducibles aunque lleguen frames desordenados |
+| Drift | chi² para el conteo de detecciones, KS para las continuas, Holm sobre los 4 tests; solo predicciones con el umbral calibrado | El conteo es discreto; sin corrección las falsas alarmas se multiplican; otro umbral cambia las features |
+| Monitoreo → acción | Con drift: alerta + manifiesto de reetiquetado con las imágenes muestreadas en `raw/stream/` | Cierra el ciclo hacia Label Studio en lugar de solo pintar una tarea de rojo |
+| Persistencia de predicciones | Best-effort; no se persiste si el cliente ya se fue | La inferencia no depende del monitoreo y el monitoreo no ve requests abandonadas |
 
 ## Resultados medidos
 
+Instalación limpia (`down -v` y `.env` nuevo) en un i7-12700F (20 hilos), CPU, 2026-10-15.
+
 | Qué | Resultado |
 |---|---|
-| `registrar_modelo` de punta a punta | 6 tareas OK en ~6 min en CPU desde una instalación limpia (evaluar y referencia corren en paralelo) |
-| Evaluación (`val` revisado, 95 imágenes) | **mAP 0,817 · AP50 0,931**, igual al val del release; promoción a `champion` automática con `min_map = 0.5` |
-| REST `/v1/detect` con el RT-DETR | Contrato correcto; 415, 422 y umbral inválido verificados |
-| gRPC `Detect` y `DetectStream` | Funcionan; `DetectStream` devuelve un frame por respuesta, en orden |
-| Tamaño de request (imagen de 209 KB) | gRPC 209 284 B · multipart 209 280 B · JSON+base64 279 052 B (+33 %) |
-| Streaming normal | Sin drift en 2 ventanas de 20 frames |
-| Streaming con frames oscurecidos | Drift en `brightness` y `contrast` en ambas ventanas |
-| Separación gateway / inferencia | Imagen de borde 2.3 GB → **245 MB**; RAM 1448 → **647 MiB** (una sola copia del modelo); build del gateway 31 s; resultado idéntico al anterior |
-| Escalado con `--scale inference=2` | **Sin demostrar.** Primer intento: el gateway usaba solo la réplica 1; se corrigió con `max_connection_age` y falta re-medir |
-| Tests | 40 (gateway con stub gRPC, servicio, servidor gRPC real, drift) |
-| Latencia de inferencia en CPU | ~1,5–2 s por imagen (8 núcleos, solo AVX2); el forward domina, el preprocesamiento son 11 ms |
+| `registrar_modelo` de punta a punta | 7 tareas OK en **3,7 min**; promovió solo a `champion` |
+| Gate (`test` revisado, 95 imágenes) | **mAP 0,647 (IC 95 % 0,611–0,705) · AP50 0,930**; el release reporta 0,649 / 0,930 en el mismo set |
+| Linaje en MLflow | run de evaluación con `eval_set/test-11bd28e3bec4.json`, `eval_sha256`, `code_sha256`, `git_commit` = HEAD; versión con `weights_dir_sha256` y `weights_source_sha256` |
+| Pesos alterados en MinIO | inference no los carga (`IntegrityError`, hash distinto del de MLflow) → `/health` 503; al restaurarlos vuelve solo |
+| Validación (ataques de la evaluación) | GIF declarado `image/jpeg` → **415**; PNG 20000² → **422** sin decodificar; BMP por gRPC → `INVALID_ARGUMENT` (415 en el trailer) |
+| Superficie | sin clave → 401, clave inválida → 403, reload con clave de usuario → 403; gRPC sin token → `UNAUTHENTICATED`; usuario `gateway` de MinIO no puede escribir `models/` ni leer `mlflow`; MLflow rechaza `Host` ajeno (403) |
+| `DetectLive` | 40 frames en un stream (antes `DetectStream` con un lote así daba `RESOURCE_EXHAUSTED`); un frame inválido trae `error` y el stream sigue |
+| Streaming con broker, control negativo | 3 cámaras del `test` (videos fuera de la referencia), ventanas de 30 frames: **sin drift**, p95 ≈ 440 ms |
+| Streaming con broker, control positivo | frames oscurecidos: **drift en brillo y contraste** y alerta en `monitoring/alerts/` |
+| `monitoreo_drift` | 319 frames (solo umbral calibrado): drift en brillo (p = 2e-20) y contraste (p = 5e-13), no en conteo ni score; manifiesto con 29 imágenes para reetiquetar; Parquet en `curated/predictions/` |
+| Falsas alarmas bajo H0 (test unitario) | ≤ 6 de 200 ventanas con Holm a α = 0,01 |
+| Tamaño de request (imagen de 285 KB) | gRPC 285 103 B · multipart 285 099 B · JSON+base64 380 144 B (+33 %) |
+| Separación gateway / inferencia | imagen de borde 2,3 GB → **310 MB** (245 MB antes de sumar GraphQL y boto3); RAM 1448 → **647 MiB** (una copia del modelo) |
+| Escalado a igual CPU (8 hilos, REST, 40 requests) | 1 réplica × 8 hilos: **3,3 req/s, p50 291 ms** con 1 cliente; 2 réplicas × 4 hilos: **4,0 req/s** con 2–4 clientes (**+20 %**) pero p50 441 ms con 1 cliente. Contra 1 × 4 hilos (2,4 req/s) el ×1,7 de antes comparaba el doble de CPU. Requiere `max_connection_age` para que el gateway re-resuelva el DNS |
+| Tests | 83, más el CI con `docker compose config` y la compilación de los DAGs |
 
 ## Limitaciones conocidas
 
-- **Set de evaluación chico.** El gate usa 95 imágenes de 4 videos. Sirve para detectar un modelo roto o peor
-  que el actual, no para estimar el rendimiento en calles nuevas; el test del release (0,649) no se usa en el DAG
-  para no convertirlo en un set de selección.
-- **Latencia.** Unos 2 s por imagen en CPU frente a 19,5 ms en GPU. Opciones: ONNX Runtime, cuantización
-  int8 o GPU. No se midieron en una máquina sin carga.
-- **Streaming simulado.** Una carpeta de imágenes reproducida a N fps por gRPC unario, no un broker de
-  mensajes. A 2 s por frame el throughput efectivo es ~0,5 fps.
-- **Drift.** Con ventanas chicas y 4 features hay riesgo de falsas alarmas (comparaciones múltiples sin
-  corrección). La referencia es el `val` revisado, que no es tráfico real.
+- **Set del gate chico.** 95 imágenes de 7 videos: el IC 95 % mide ±0,05. Sirve para frenar un modelo roto o
+  claramente peor, no para distinguir diferencias de 0,01; por eso el margen mínimo y el IC publicado. Si el gate se usa
+  muchas veces para elegir entre candidatos, el `test` se va gastando: haría falta un holdout nuevo periódico.
+- **Drift.** La referencia es el `val` revisado (95 frames de 7 videos), no tráfico real; con una sola cámara real lo
+  esperable es drift casi siempre hasta construir una referencia por cámara. Frames consecutivos están autocorrelacionados
+  (los tests suponen independencia): `thin` ayuda pero no lo resuelve. El drift no mide la calidad del modelo: para eso
+  hace falta ground truth, que es lo que habilita el manifiesto de reetiquetado.
+- **Latencia y escalado.** ~290–440 ms por imagen en CPU (8 o 4 hilos) frente a 19,5 ms en GPU. A igual CPU, una
+  réplica con más hilos da menor latencia y dos réplicas dan ~20 % más throughput con varios clientes: replicar conviene
+  para throughput y disponibilidad, no para latencia. ONNX Runtime o int8 quedan como trabajo futuro.
+- **Streaming.** El productor simula cámaras con imágenes del dataset; semántica at-least-once (un frame puede
+  procesarse dos veces si el consumidor se cae antes del commit).
+- **Seguridad.** Residuales en [seguridad.md](seguridad.md): MLflow sin usuarios, sin TLS, rate limit en memoria.
 
 ## Trabajo futuro
 
-- Aprendizaje federado: clientes que ajustan el detector con sus propias imágenes sin centralizarlas.
-- Seguridad: autenticación (JWT) y desenfoque de caras y patentes antes de persistir.
-- ONNX o cuantización para bajar la latencia en CPU.
-- GraphQL para consultar el modelo activo y las detecciones (opcional en el alcance).
+- Desenfoque de caras y patentes antes de persistir imágenes.
+- Referencias de drift por cámara y reentrenamiento a partir de los manifiestos de reetiquetado.
+- ONNX o cuantización para bajar la latencia en CPU; TLS/mTLS y MLflow con autenticación.

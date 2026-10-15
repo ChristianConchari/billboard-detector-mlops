@@ -1,8 +1,20 @@
 # VallaVision — Detección de vallas publicitarias en producción
 
-**TP integrador · Documento de alcance (BORRADOR)**
+**TP integrador · Documento de alcance del Hito #1 (histórico)**
 
-> Estado: borrador para discutir en el grupo. Los puntos marcados **[POR DEFINIR]** dependen de decisiones abiertas.
+> **Este documento es el diseño del Hito #1 y se conserva como estaba.** Lo implementado está en
+> [arquitectura.md](arquitectura.md), [contrato.md](contrato.md) y [seguridad.md](seguridad.md).
+> Diferencias entre lo planeado y lo implementado:
+>
+> | Planeado acá | Implementado |
+> |---|---|
+> | Un "ViT de detección"; un detector público como sustituto si no llegaba | RT-DETR ResNet-50 fine-tuned (híbrido CNN-transformer) del release `model-v1`; no hizo falta sustituto |
+> | Promoción `Staging` → `Production` | Aliases de MLflow 3: `champion`, `challenger`, `anterior` (las stages están deprecadas) |
+> | Evaluar sobre "un conjunto de validación pequeño" | Gate sobre el `test` revisado (no usado en entrenamiento ni calibración), con IC por bootstrap y champion re-evaluado sobre el mismo set |
+> | GraphQL "por confirmar" | GraphQL de solo lectura en el gateway (modelo, versiones, predicciones) |
+> | Seguridad avanzada fuera de alcance | Seguridad SAIF en el gateway, gRPC y MinIO. Siguen fuera: aprendizaje federado y desenfoque de caras y patentes |
+> | Streaming con una carpeta reproducida | Redpanda (Kafka) + consumidor con ventanas por event time; además `DetectLive` bidireccional |
+> | Formato y origen de datos por definir | COCO, export de origen; las cajas revisadas a mano vienen del repo del modelo (`annotations/reviewed/`) |
 > Materia: MLOps II (CEIA · FIUBA). Hitos: diseño (Sesión 4) · checkpoint (Sesión 6) · defensa (Sesión 8) · repo una semana después.
 
 **Equipo:** Christian Conchari (individual — confirmar con el docente, el reglamento pide 2–6)

@@ -4,7 +4,7 @@
 # Etapa 1: generar el código gRPC (grpcio-tools no hace falta en la imagen final)
 FROM python:3.12-slim AS proto
 WORKDIR /build
-RUN pip install --no-cache-dir "grpcio-tools>=1.60"
+RUN pip install --no-cache-dir grpcio-tools==1.81.1 protobuf==6.33.6
 COPY proto proto
 COPY scripts/gen_proto.sh scripts/gen_proto.sh
 RUN mkdir -p vallavision && sh scripts/gen_proto.sh

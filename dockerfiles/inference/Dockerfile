@@ -8,7 +8,7 @@ COPY dockerfiles/inference/requirements.txt /requirements.txt
 RUN pip install --upgrade pip && pip install --no-cache-dir -r /requirements.txt
 # vallavision.detector importa mlflow.pyfunc, que necesita pandas (va aparte para no
 # invalidar la capa de torch)
-RUN pip install --no-cache-dir pandas
+RUN pip install --no-cache-dir pandas==3.0.6 numpy==2.5.4
 
 COPY proto /app/proto
 COPY scripts/gen_proto.sh /app/scripts/gen_proto.sh
