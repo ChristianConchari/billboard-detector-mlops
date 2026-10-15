@@ -50,7 +50,7 @@ preparar() {
   if [ ! -x "$PY" ]; then
     echo "preparando $VENV (una sola vez)…"
     python3 -m venv "$VENV"
-    "$VENV/bin/pip" -q install pillow==12.3.0 grpcio==1.84.0 protobuf==6.33.6 grpcio-tools==1.81.1 kafka-python==3.0.11
+    "$VENV/bin/pip" -q install -r notebooks/requirements.txt
   fi
   [ -f vallavision/grpc_gen/detector_pb2_grpc.py ] || PYTHON=$PY sh scripts/gen_proto.sh
   # Un DAG pausado acepta el disparo desde la interfaz pero no corre: se despausan acá
