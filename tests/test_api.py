@@ -213,3 +213,12 @@ def test_post_sin_cuerpo_no_exige_content_length(admin):
 def test_415_del_formato_real_llega_como_415(client, stub):
     stub.error = FakeRpcError(grpc.StatusCode.INVALID_ARGUMENT, "formato no soportado: GIF", (("http-status", "415"),))
     assert post(client).status_code == 415
+
+
+def test_openapi_declara_la_api_key(client):
+    # /docs muestra "Authorize" y las rutas protegidas piden la clave
+    spec = client.get("/openapi.json").json()
+    assert spec["components"]["securitySchemes"]["APIKeyHeader"] == {
+        "type": "apiKey", "in": "header", "name": "X-API-Key", "description": "Clave de GATEWAY_API_KEYS"}
+    assert spec["paths"]["/v1/detect"]["post"]["security"] == [{"APIKeyHeader": []}]
+    assert "security" not in spec["paths"]["/health"]["get"]

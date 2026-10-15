@@ -5,6 +5,11 @@
 #   scripts/demo.sh 3 6        # solo esos segmentos (para grabar por partes)
 #   scripts/demo.sh --lista    # lista de segmentos
 #   DEMO_SIN_PAUSAS=1 scripts/demo.sh 4   # sin pausas (ensayo)
+#   DEMO_CLI=1 scripts/demo.sh 2          # dispara los DAGs por comando en vez de esperar la interfaz
+#
+# Lo que se ve mejor en una interfaz va en el navegador: los DAGs se disparan desde Airflow
+# (segmentos 2 y 6; el script espera la corrida y resume en la terminal) y la inferencia se prueba
+# en /docs del gateway (segmento 3). El resto queda en la terminal.
 #
 # Requisitos: stack arriba y con champion (README, Instalación). Los secretos se leen de .env y
 # nunca se imprimen: en pantalla aparecen como $GATEWAY_API_KEYS, $INFERENCE_TOKEN, etc.
@@ -48,6 +53,10 @@ preparar() {
     "$VENV/bin/pip" -q install pillow==12.3.0 grpcio==1.84.0 protobuf==6.33.6 grpcio-tools==1.81.1 kafka-python==3.0.11
   fi
   [ -f vallavision/grpc_gen/detector_pb2_grpc.py ] || PYTHON=$PY sh scripts/gen_proto.sh
+  # Un DAG pausado acepta el disparo desde la interfaz pero no corre: se despausan acá
+  for dag in registrar_modelo monitoreo_drift rollback_modelo; do
+    docker exec airflow-apiserver airflow dags unpause "$dag" >/dev/null 2>&1
+  done
   if ! curl -sf localhost:${FASTAPI_PORT:-8800}/health >/dev/null; then
     echo "el gateway no tiene champion cargado: correr registrar_modelo antes de grabar"; exit 1
   fi
@@ -77,6 +86,31 @@ disparar() {  # disparar <dag> → run_id
     python3 -c "import json,sys;print(json.load(sys.stdin)[0]['dag_run_id'])"
 }
 
+ultimo_run_manual() {  # último run disparado a mano (los horarios de monitoreo_drift no cuentan)
+  docker exec airflow-apiserver airflow dags list-runs "$1" -o json 2>/dev/null | python3 -c "
+import json, sys
+runs = [r for r in json.load(sys.stdin) if r['run_id'].startswith('manual__')]
+runs.sort(key=lambda r: r.get('run_after') or r.get('start_date') or '')
+print(runs[-1]['run_id'] if runs else '')"
+}
+
+lanzar() {  # lanzar <dag> → run_id: espera el disparo desde la interfaz de Airflow (o lo dispara con DEMO_CLI=1)
+  local dag=$1
+  if [ -n "${DEMO_CLI:-}" ]; then
+    printf "${G}\$${R} ${B}docker exec airflow-apiserver airflow dags trigger %s${R}\n" "$dag" >&2
+    disparar "$dag"; return
+  fi
+  local antes nuevo; antes=$(ultimo_run_manual "$dag")
+  printf "${Y}▶ En Airflow (http://localhost:%s): Dags → %s → Trigger → Trigger, y abrir la vista Graph${R}\n" \
+    "${AIRFLOW_PORT:-8080}" "$dag" >&2
+  printf "${D}  esperando la corrida…${R}\n" >&2
+  while true; do
+    nuevo=$(ultimo_run_manual "$dag")
+    [ -n "$nuevo" ] && [ "$nuevo" != "$antes" ] && { echo "$nuevo"; return; }
+    sleep 3
+  done
+}
+
 esperar_inference() {  # esperar_inference <healthy|unhealthy>
   for _ in $(seq 1 60); do
     [ "$(docker inspect -f '{{.State.Health.Status}}' $INFERENCE 2>/dev/null)" = "$1" ] && return 0
@@ -99,8 +133,7 @@ seg2() {
   titulo "2 · Registro y promoción del modelo (DAG registrar_modelo)"
   nota "baja model-v1 del release (SHA-256), mide el mAP con IC sobre el test revisado,"
   nota "re-evalúa al champion sobre el mismo set y decide el alias"
-  printf "${G}\$${R} ${B}docker exec airflow-apiserver airflow dags trigger registrar_modelo${R}"; pausa; echo
-  local run; run=$(disparar registrar_modelo); echo "run: $run"; echo
+  local run; run=$(lanzar registrar_modelo); echo "run: $run"; echo
   esperar_dag registrar_modelo "$run"
   echo
   nota "lo que quedó en MLflow: alias, métricas del gate con IC y linaje"
@@ -120,13 +153,28 @@ for found in sorted(c.search_model_versions("name='billboard-detector'"), key=la
     print(f"  pesos    {t['weights_uri']}  sha256 {t['weights_dir_sha256'][:16]}…")
     print(f"  código   commit {t['git_commit'][:12]}  code_sha256 {t['code_sha256'][:16]}…")
 PY
-  echo; pausa
+  echo
+  nota "en MLflow (http://localhost:${MLFLOW_PORT:-5001}): experimento evaluaciones → último run →"
+  nota "métricas gate_map e IC, tag git_commit y el artefacto eval_set/test-….json; Models → billboard-detector (alias champion)"
+  pausa
 }
 
 seg3() {
   titulo "3 · Inferencia REST: POST /v1/detect"
+  local url="http://localhost:${FASTAPI_PORT:-8800}/docs"
+  # La clave va al portapapeles, nunca a la pantalla
+  if command -v xclip >/dev/null; then
+    printf %s "${GATEWAY_API_KEYS%%,*}" | xclip -selection clipboard && ok "API key copiada al portapapeles"
+  elif command -v wl-copy >/dev/null; then
+    printf %s "${GATEWAY_API_KEYS%%,*}" | wl-copy && ok "API key copiada al portapapeles"
+  fi
+  printf "${Y}▶ En %s: Authorize → pegar la clave → POST /v1/detect → Try it out → elegir una imagen → Execute${R}\n" "$url"
+  [ -z "${DEMO_NO_ABRIR:-}" ] && (xdg-open "$url" >/dev/null 2>&1 &)
+  nota "imagen sugerida: $DEMO_IMG"
+  pausa
+  nota "la misma llamada, con las cajas dibujadas sobre la foto"
   corre "$PY scripts/ver_detecciones.py $DEMO_IMG${DEMO_NO_ABRIR:+ --no-abrir}"
-  nota "la imagen anotada se abre en el visor; la predicción quedó en s3://data/predictions/"
+  nota "la predicción quedó en s3://data/predictions/ (sin la imagen)"
   pausa
 }
 
@@ -180,15 +228,19 @@ seg5() {
   titulo "5 · Streaming: 3 cámaras → Redpanda → consumidor → ventanas de 15 s por event time"
   stream "cámaras del test revisado (videos que no están en la referencia de drift)" "--rate 2 --loops 1"
   stream "las mismas cámaras de noche (frames oscurecidos): lo va a ver monitoreo_drift" "--rate 2 --loops 1 --degrade oscurecer"
+  nota "el topic: 3 particiones; la cámara es la clave, así que sus frames caen siempre en la misma (por hash)"
+  corre "docker exec redpanda rpk topic describe frames -p"
+  nota "el grupo de consumidores: qué offset confirmó y cuánto le falta (lag)"
+  corre "docker exec redpanda rpk group describe detector"
   pausa
 }
 
 seg6() {
   titulo "6 · Monitoreo de drift (DAG monitoreo_drift, horario)"
   nota "compacta la última hora de predicciones, REST y streaming (solo umbral calibrado): chi² + KS con Holm"
-  printf "${G}\$${R} ${B}docker exec airflow-apiserver airflow dags trigger monitoreo_drift${R}"; pausa; echo
-  local run; run=$(disparar monitoreo_drift); echo "run: $run"; echo
+  local run; run=$(lanzar monitoreo_drift); echo "run: $run"; echo
   esperar_dag monitoreo_drift "$run"
+  nota "en Airflow: la tarea alertar queda en rojo a propósito (DriftDetected); su log lo explica"
   echo; printf "${G}\$${R} ${B}lo que dejó en el Data Lake${R}"; pausa; echo
   docker exec -i $WORKER python - <<'PY'
 import boto3, json
@@ -204,7 +256,9 @@ for f, m in r["metrics"].items():
 k, a = last("monitoring/alerts/")
 print(f"alerta   s3://data/{k}: [{a['kind']}] {a['message']}")
 PY
-  echo; pausa
+  echo
+  nota "en MinIO (http://localhost:${MINIO_PORT_UI:-9001}): bucket data → monitoring/alerts/ y monitoring/drift/"
+  pausa
 }
 
 seg7() {

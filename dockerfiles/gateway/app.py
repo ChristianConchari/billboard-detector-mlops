@@ -14,8 +14,9 @@ from collections import defaultdict, deque
 from typing import Optional
 
 import grpc
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Security, UploadFile
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
 from vallavision.grpc_gen import detector_pb2 as pb
@@ -131,11 +132,16 @@ def _authenticate(request: Request, admin: bool):
     return key
 
 
-def require_key(request: Request):
+# Declarar el esquema hace que /docs muestre el botón "Authorize" para cargar la clave una vez;
+# la validación la hace _authenticate (auto_error=False: los 401/403 son los del contrato)
+api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False, description="Clave de GATEWAY_API_KEYS")
+
+
+def require_key(request: Request, _: Optional[str] = Security(api_key_scheme)):
     return _authenticate(request, admin=False)
 
 
-def require_admin(request: Request):
+def require_admin(request: Request, _: Optional[str] = Security(api_key_scheme)):
     return _authenticate(request, admin=True)
 
 

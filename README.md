@@ -83,8 +83,8 @@ flowchart LR
    y el tamaño, y reenvía la imagen por gRPC. `inference` es el único que tiene el modelo: valida el
    formato real y las dimensiones antes de decodificar, carga solo pesos cuyo hash coincide con el
    registrado y guarda cada predicción (sin la imagen).
-3. **Streaming.** Las cámaras publican frames en Redpanda (una cámara, una partición: el orden se
-   conserva). El consumidor los infiere y arma ventanas de 15 s por el instante de captura, con
+3. **Streaming.** Las cámaras publican frames en Redpanda con la cámara como clave: todos los frames
+   de una cámara caen en la misma partición y conservan su orden. El consumidor los infiere y arma ventanas de 15 s por el instante de captura, con
    tolerancia a frames desordenados, y alerta si la latencia supera el SLO.
 4. **Monitoreo.** `monitoreo_drift` compara cada hora las predicciones (REST y streaming) contra la
    referencia: chi² para la cantidad de vallas por frame, KS para score, brillo y contraste, con

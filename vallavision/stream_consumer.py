@@ -15,7 +15,9 @@ streaming), en un solo lugar y con una sola política de alertas.
 
 Semántica at-least-once: el offset se confirma después de inferir. Si el consumidor se cae
 entre la inferencia y el commit, ese frame se procesa dos veces (mismo `frame_id`).
-Varias instancias en el mismo grupo se reparten las particiones (una cámara = una partición).
+Varias instancias en el mismo grupo se reparten las particiones. La partición sale del hash de la
+cámara: los frames de una cámara van siempre a la misma (orden por cámara), pero varias cámaras
+pueden compartir una partición.
 """
 
 import json
