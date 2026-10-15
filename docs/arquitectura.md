@@ -1,6 +1,6 @@
 # Arquitectura y decisiones
 
-Resumen para la defensa. Contexto: VallaVision es el microservicio de detección pensado para integrarse a una
+Resumen para la defensa. Contexto: el sistema es el microservicio de detección pensado para integrarse a una
 plataforma de etiquetado geolocalizado de imágenes (vehículos de relevamiento con cámara; cada frame con su
 posición GPS). El gateway REST es la API que consumiría la plataforma, Redpanda la ingesta de los vehículos y
 `predictions/` las etiquetas resultantes. El contrato está en [contrato.md](contrato.md), los controles de seguridad en

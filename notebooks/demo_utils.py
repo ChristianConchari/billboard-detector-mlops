@@ -1,4 +1,4 @@
-"""Funciones de la demo en notebook (notebooks/demo_vallavision.ipynb).
+"""Funciones de la demo en notebook (notebooks/demo_deteccion_vallas.ipynb).
 
 La lógica vive acá para que las celdas del notebook sean cortas y se lean en el video. Los secretos
 se leen de `.env` y nunca se imprimen. Requiere el stack arriba y con champion.

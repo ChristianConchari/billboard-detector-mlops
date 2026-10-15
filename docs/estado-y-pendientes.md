@@ -1,7 +1,7 @@
 # Estado y pendientes (traspaso entre máquinas)
 
 Última actualización: 2026-10-15. Escrito para retomar el trabajo en otra máquina sin depender de la memoria de la sesión anterior.
-El detalle cronológico está en la bitácora del vault (`Second brain/10 Projects/MLOps II - VallaVision/Bitácora del proceso.md`).
+El detalle cronológico está en la bitácora del proyecto, fuera del repo.
 
 ## Qué funciona (verificado en una instalación limpia, 2026-10-15)
 

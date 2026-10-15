@@ -1,4 +1,4 @@
-"""Gateway REST de VallaVision (docs/contrato.md §2).
+"""Gateway REST del sistema de detección de vallas publicitarias (docs/contrato.md §2).
 
 No carga el modelo: autentica (API key), limita la tasa y el tamaño de las requests,
 valida lo barato, reenvía la imagen por gRPC al servicio `inference` y traduce los
@@ -145,7 +145,7 @@ def require_admin(request: Request, _: Optional[str] = Security(api_key_scheme))
     return _authenticate(request, admin=True)
 
 
-app = FastAPI(title="VallaVision", version="1")
+app = FastAPI(title="Sistema de detección de vallas publicitarias", version="1")
 
 
 @app.middleware("http")

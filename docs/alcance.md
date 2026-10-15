@@ -1,4 +1,4 @@
-# VallaVision — Detección de vallas publicitarias en producción
+# Sistema de detección de vallas publicitarias en producción
 
 **TP integrador · Documento de alcance del Hito #1 (histórico)**
 

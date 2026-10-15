@@ -97,7 +97,7 @@ def main():
 
     result = detect(args.url, (env("GATEWAY_API_KEYS") or "").split(",")[0], args.imagen, args.umbral)
     print(json.dumps(result, indent=2, ensure_ascii=False))
-    out = args.salida or os.path.join(tempfile.gettempdir(), f"vallavision-{result['request_id'][:8]}.jpg")
+    out = args.salida or os.path.join(tempfile.gettempdir(), f"deteccion-vallas-{result['request_id'][:8]}.jpg")
     draw(args.imagen, result).save(out, quality=92)
     print(f"\nimagen anotada: {out}", file=sys.stderr)
     if not args.no_abrir:

@@ -116,7 +116,7 @@ def ensure_topic():
     from kafka.admin import KafkaAdminClient, NewTopic
     from kafka.errors import TopicAlreadyExistsError
 
-    admin = KafkaAdminClient(bootstrap_servers=BOOTSTRAP, client_id="vallavision-admin")
+    admin = KafkaAdminClient(bootstrap_servers=BOOTSTRAP, client_id="deteccion-vallas-admin")
     try:
         admin.create_topics([NewTopic(TOPIC, num_partitions=PARTITIONS, replication_factor=1)])
         print(f"topic {TOPIC} creado con {PARTITIONS} particiones", flush=True)

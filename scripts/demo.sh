@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Demo guiada de VallaVision para grabar la presentación.
+# Demo guiada del sistema de detección de vallas publicitarias (alternativa en terminal al notebook).
 #
 #   scripts/demo.sh            # todos los segmentos, con pausa (Enter) antes de cada comando
 #   scripts/demo.sh 3 6        # solo esos segmentos (para grabar por partes)
@@ -185,8 +185,8 @@ seg4() {
   corre "curl -s -w '  → %{http_code}\n' $url/v1/model"
   corre "curl -s -w '  → %{http_code}\n' -H 'X-API-Key: no-es-mia' $url/v1/model"
   nota "un GIF renombrado .jpg y declarado image/jpeg: se mira el formato real"
-  $PY -c "from PIL import Image; Image.new('RGB',(64,64),'red').save('/tmp/vallavision-falsa.jpg','GIF')"
-  corre "curl -s -w '  → %{http_code}\n' -H \"X-API-Key: \$GATEWAY_API_KEYS\" -F 'image=@/tmp/vallavision-falsa.jpg;type=image/jpeg' $url/v1/detect"
+  $PY -c "from PIL import Image; Image.new('RGB',(64,64),'red').save('/tmp/deteccion-vallas-falsa.jpg','GIF')"
+  corre "curl -s -w '  → %{http_code}\n' -H \"X-API-Key: \$GATEWAY_API_KEYS\" -F 'image=@/tmp/deteccion-vallas-falsa.jpg;type=image/jpeg' $url/v1/detect"
   nota "recargar el modelo exige clave admin"
   corre "curl -s -w '  → %{http_code}\n' -X POST -H \"X-API-Key: \$GATEWAY_API_KEYS\" $url/v1/reload"
   nota "llamar al modelo por gRPC saltando el gateway, sin token"
@@ -197,7 +197,7 @@ except grpc.RpcError as e: print('gRPC sin token →', e.code().name)\""
 }
 
 ventanas() {  # muestra como tabla las ventanas que cierra el consumidor; corta al matar `docker logs`
-  docker logs -f --since 1s $CONSUMER 2>&1 & echo $! > /tmp/vallavision-demo-logs.pid
+  docker logs -f --since 1s $CONSUMER 2>&1 & echo $! > /tmp/deteccion-vallas-logs.pid
 }
 formatear() {
   python3 -u -c '
@@ -220,7 +220,7 @@ stream() {  # stream <título> <args del productor>
   # shellcheck disable=SC2086
   $PY scripts/camara_productor.py $2 2>&1 | sed "s/^/${D}productor: /;s/$/${R}/"
   sleep 15  # el consumidor cierra las ventanas de una cámara tras 10 s sin frames
-  kill "$(cat /tmp/vallavision-demo-logs.pid)" 2>/dev/null; wait $f 2>/dev/null
+  kill "$(cat /tmp/deteccion-vallas-logs.pid)" 2>/dev/null; wait $f 2>/dev/null
   echo
 }
 

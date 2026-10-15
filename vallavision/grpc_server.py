@@ -1,4 +1,4 @@
-"""Servicio de inferencia de VallaVision: único dueño del modelo (docs/contrato.md §3).
+"""Servicio de inferencia del sistema de detección de vallas: único dueño del modelo (docs/contrato.md §3).
 
 Lo consumen el gateway REST y el consumidor de streaming (servicio interno). Se puede
 escalar con réplicas: cada una carga su copia del modelo y atiende `INFERENCE_CONCURRENCY`

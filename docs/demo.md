@@ -4,17 +4,17 @@ La demo combina dos cosas, cada una donde se ve mejor:
 
 - **Navegador** para lo que ya tiene interfaz: Airflow (disparar los DAGs y ver el grafo), MLflow (evaluaciones,
   linaje, alias) y MinIO (el Data Lake, las alertas).
-- **Notebook** (`notebooks/demo_vallavision.ipynb`) para el servicio por dentro: inferencias con las cajas dibujadas,
+- **Notebook** (`notebooks/demo_deteccion_vallas.ipynb`) para el servicio por dentro: inferencias con las cajas dibujadas,
   REST vs gRPC, los ataques de seguridad, el streaming de los vehículos y el drift con gráficos. La lógica está en
   `notebooks/demo_utils.py`, así las celdas son de una o dos líneas.
 
-El relato es el del caso de uso: VallaVision como el microservicio de detección de una **plataforma de
+El relato es el del caso de uso: el sistema como el microservicio de detección de una **plataforma de
 etiquetado geolocalizado de imágenes** (vehículos de relevamiento con cámara; cada frame con su posición GPS, visible
 en las fotos). Sin detalles de la plataforma: solo su papel como consumidora del servicio.
 
 ```bash
 python3 -m venv .venv-demo && .venv-demo/bin/pip install -r notebooks/requirements.txt   # una vez
-.venv-demo/bin/jupyter lab notebooks/demo_vallavision.ipynb
+.venv-demo/bin/jupyter lab notebooks/demo_deteccion_vallas.ipynb
 ```
 
 El notebook lee los secretos de `.env` y no los imprime. `scripts/demo.sh` sigue disponible como alternativa en la
@@ -34,7 +34,7 @@ terminal (mismos pasos, con pausas).
 
 | # | Dónde | Qué se ve | Qué decir |
 |---|---|---|---|
-| 1 | Notebook, intro + celda 1 | el caso de uso (tabla de piezas y su papel en la plataforma) y el modelo servido: versión, mAP del gate con IC | "VallaVision es el servicio de detección de una plataforma de etiquetado geolocalizado. Esto es lo que está sirviendo." |
+| 1 | Notebook, intro + celda 1 | el caso de uso (tabla de piezas y su papel en la plataforma) y el modelo servido: versión, mAP del gate con IC | "El sistema es el servicio de detección de una plataforma de etiquetado geolocalizado. Esto es lo que está sirviendo." |
 | 2 | **Airflow → MLflow** | disparar `registrar_modelo` (Trigger, vista Graph; cortar la espera) → log de `promover` → en MLflow el run de `evaluaciones` (métricas, `git_commit`, artefacto `eval_set`) y el modelo con alias `champion` | "Ningún modelo nuevo cambia las etiquetas de la plataforma sin pasar un gate sobre datos que no vio, con linaje completo." |
 | 3 | Notebook §1 | la foto con las 5 vallas y su tabla; el mosaico de 4 recorridos con la posición GPS sobreimpresa | "La plataforma manda un frame; el servicio devuelve las cajas y la versión del modelo que las produjo." |
 | 4 | Notebook §2 | REST vs gRPC: bytes y latencia; base64 +33 % | "Adentro, gRPC: bytes tal cual, contrato tipado. La plataforma solo ve el gateway." |

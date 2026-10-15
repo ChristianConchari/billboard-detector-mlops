@@ -2,12 +2,12 @@
 
 [![CI](https://github.com/ChristianConchari/billboard-detector-mlops/actions/workflows/ci.yml/badge.svg)](https://github.com/ChristianConchari/billboard-detector-mlops/actions/workflows/ci.yml)
 
-**VallaVision** pone en producción un detector de **vallas publicitarias** en imágenes de cámaras de calle.
+Este proyecto pone en producción un **sistema de detección de vallas publicitarias** en imágenes de cámaras de calle.
 TP integrador de *Operaciones de Aprendizaje Automático II* (CEIA · FIUBA). Autor: Christian Conchari.
 
 **Caso de uso.** El servicio está pensado como el microservicio de detección de una **plataforma de
 etiquetado geolocalizado de imágenes**: vehículos de relevamiento recorren la ciudad con una cámara, cada frame llega
-con su posición GPS, y VallaVision devuelve dónde hay vallas para que la plataforma las etiquete en el mapa. Este
+con su posición GPS, y el servicio devuelve dónde hay vallas para que la plataforma las etiquete en el mapa. Este
 repositorio implementa y demuestra ese servicio de forma autónoma; la integración con la plataforma queda fuera de su alcance.
 
 El modelo ya está entrenado: es el RT-DETR del proyecto
@@ -142,7 +142,7 @@ build falla con `ReadTimeoutError` de PyPI, construir primero la imagen pesada
 
 Solo el gateway escucha fuera de la máquina; el resto está en `127.0.0.1`. Uso detallado (REST, gRPC,
 streaming, DAGs, escalado, tests): [docs/uso.md](docs/uso.md). Demo: el notebook
-[`notebooks/demo_vallavision.ipynb`](notebooks/demo_vallavision.ipynb) (inferencias, gRPC, seguridad, streaming y
+[`notebooks/demo_deteccion_vallas.ipynb`](notebooks/demo_deteccion_vallas.ipynb) (inferencias, gRPC, seguridad, streaming y
 drift con gráficos) más Airflow, MLflow y MinIO en el navegador ([guion](docs/demo.md)).
 
 ## Estructura del repositorio
