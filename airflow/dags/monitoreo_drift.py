@@ -7,10 +7,10 @@
    umbral calibrado: un cliente que pide otro umbral no puede disparar una alarma.
 2. `comparar`: chi² (conteo de detecciones) y KS (continuas) con corrección de Holm contra la
    referencia (`val` revisado) → reporte en `monitoring/drift/`.
-3. `accionar`: si hay drift, escribe una alerta en `monitoring/alerts/` y un manifiesto de
-   reetiquetado en `curated/relabel/` con las imágenes guardadas del intervalo (para Label
-   Studio) y falla con `DriftDetected`. Un error técnico falla con otra excepción; el callback
-   deja la alerta con `kind` distinto en cada caso.
+3. `alertar`: si hay drift, escribe una alerta `drift` en `monitoring/alerts/` y falla con
+   `DriftDetected` (la corrida queda en rojo en Airflow). Un error técnico falla con otra
+   excepción y el callback deja una alerta `error`. Qué hacer ante el drift lo decide una
+   persona: el reentrenamiento vive en el repo del modelo, fuera de este sistema.
 
 Contrato en docs/contrato.md §5.
 """
@@ -60,7 +60,7 @@ def _drift_alert_exists(run_id):
 def _alert_on_failure(context):
     """Alerta `error` en monitoring/alerts/ si la tarea falló por un problema técnico.
 
-    El drift no pasa por acá como error: `accionar` ya dejó su alerta `drift` con el run_id.
+    El drift no pasa por acá como error: `alertar` ya dejó su alerta `drift` con el run_id.
     (En Airflow 3 el callback no siempre recibe la excepción, por eso se mira la alerta.)
     """
     ti = context["ti"]
@@ -138,14 +138,13 @@ def monitoreo_drift():
                         skipped += 1
                         continue
                     rows.append({"request_id": rec["request_id"], "created_at": rec.get("created_at"),
-                                 "image_key": rec.get("image_key"),
                                  **drift.frame_features(rec["detections"], rec["image_stats"])})
             day += timedelta(days=1)
 
         key = (f"curated/predictions/model=v{mv.version}/date={start:%Y-%m-%d}/"
                f"{start:%H%M%S}-{end:%H%M%S}.parquet")
         buf = io.BytesIO()
-        pd.DataFrame(rows, columns=["request_id", "created_at", "image_key", *drift.FEATURES]) \
+        pd.DataFrame(rows, columns=["request_id", "created_at", *drift.FEATURES]) \
             .sort_values("created_at").to_parquet(buf, index=False)
         s3.put_object(Bucket=BUCKET, Key=key, Body=buf.getvalue())
         print(f"{len(rows)} predicciones de v{mv.version} en [{start:%F %T}, {end:%F %T}) "
@@ -178,30 +177,19 @@ def monitoreo_drift():
                 "flagged": [f for f, m in result["metrics"].items() if m.get("drift")]}
 
     @task
-    def accionar(datos, resultado):
-        """Con drift: alerta + manifiesto de reetiquetado con las imágenes guardadas del intervalo."""
-        import pandas as pd
-
+    def alertar(datos, resultado):
+        """Con drift: alerta `drift` en monitoring/alerts/ y la corrida falla (visible en Airflow)."""
         if not resultado["drift"]:
             return None
-        s3 = _s3()
-        df = pd.read_parquet(io.BytesIO(s3.get_object(Bucket=BUCKET, Key=datos["parquet"])["Body"].read()))
-        images = [k for k in df["image_key"].dropna().tolist() if k]
-        now = datetime.now(timezone.utc)
-        manifest = {"reason": f"drift en {', '.join(resultado['flagged'])}", "report": resultado["report"],
-                    "model_version": datos["version"], "window": [datos["start"], datos["end"]],
-                    "images": images, "created_at": now.isoformat()}
-        key = f"curated/relabel/{now:%Y-%m-%dT%H%M%S}.json"
-        s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(manifest, indent=2).encode())
-        print(f"{len(images)} imágenes para reetiquetar → s3://{BUCKET}/{key}")
-        _write_alert("drift", manifest["reason"], report=resultado["report"], relabel=key,
-                     model_version=datos["version"], run_id=get_current_context()["run_id"])
+        reason = f"drift en {', '.join(resultado['flagged'])}"
+        key = _write_alert("drift", reason, report=resultado["report"], model_version=datos["version"],
+                           window=[datos["start"], datos["end"]], run_id=get_current_context()["run_id"])
         if get_current_context()["params"]["fail_on_drift"]:
-            raise DriftDetected(f"drift en {', '.join(resultado['flagged'])}; reetiquetado: {key}")
+            raise DriftDetected(f"{reason}; reporte: {resultado['report']}")
         return key
 
     datos = compactar()
-    accionar(datos, comparar(datos))
+    alertar(datos, comparar(datos))
 
 
 monitoreo_drift()

@@ -1,52 +1,103 @@
 # billboard-detector-mlops
 
-**VallaVision**: detector de vallas publicitarias en imágenes de calle, puesto en producción.
+[![CI](https://github.com/ChristianConchari/billboard-detector-mlops/actions/workflows/ci.yml/badge.svg)](https://github.com/ChristianConchari/billboard-detector-mlops/actions/workflows/ci.yml)
+
+**VallaVision** pone en producción un detector de **vallas publicitarias** en imágenes de cámaras de calle.
 TP integrador de *Operaciones de Aprendizaje Automático II* (CEIA · FIUBA). Autor: Christian Conchari.
 
-El foco es la **puesta en producción**, no el modelado: el detector entra como artefacto ya entrenado,
-un RT-DETR (ResNet-50) de clase única publicado en el release
-[`model-v1`](https://github.com/ChristianConchari/vit-billboard-detector/releases/tag/model-v1)
-(mAP 0.649 · AP50 0.930 en test, umbral calibrado 0.15). Alrededor: orquestación (Airflow), ciclo de
-vida (MLflow), Data Lake (MinIO), serving REST/GraphQL/gRPC, streaming con broker, monitoreo de drift
-y seguridad.
+El modelo ya está entrenado: es el RT-DETR del proyecto
+[vit-billboard-detector](https://github.com/ChristianConchari/vit-billboard-detector) (release
+[`model-v1`](https://github.com/ChristianConchari/vit-billboard-detector/releases/tag/model-v1),
+mAP 0.649 en test). Este repositorio resuelve lo que viene después de entrenar, con tres preguntas
+como guía:
 
-| Documento | Qué tiene |
+1. **¿Cómo se evita que un modelo peor llegue a producción?** Un DAG lo evalúa sobre datos que no vio,
+   lo compara con el modelo actual sobre los mismos datos y deja registrado qué datos y qué código
+   produjeron cada métrica.
+2. **¿Cómo se sirve sin que se caiga ni se abuse?** Un gateway autenticado y sin modelo valida y
+   reenvía por gRPC a un servicio de inferencia escalable, que verifica los pesos antes de servirlos.
+   Las cámaras publican en un broker que absorbe la diferencia entre lo que producen y lo que el modelo procesa.
+3. **¿Cómo se sabe que dejó de funcionar sin tener etiquetas?** Un monitoreo horario compara las
+   predicciones contra una referencia y alerta cuando cambian.
+
+![Detección: 5 vallas en un frame de cámara de calle](docs/figures/deteccion.jpg)
+
+## Resultados
+
+Medido en una instalación limpia, en CPU (i7-12700F), sin GPU.
+
+| Qué | Resultado |
 |---|---|
-| [docs/arquitectura.md](docs/arquitectura.md) | diagrama, decisiones, gate de promoción, resultados medidos y limitaciones |
-| [docs/contrato.md](docs/contrato.md) | contrato REST/GraphQL/gRPC/streaming, layout del Data Lake y DAGs |
-| [docs/seguridad.md](docs/seguridad.md) | superficie expuesta y tabla SAIF de riesgos, controles y residuales |
-| [docs/estado-y-pendientes.md](docs/estado-y-pendientes.md) | estado, mediciones, pendientes y cómo retomar en otra máquina |
-| [docs/alcance.md](docs/alcance.md) | diseño del Hito #1 (histórico) y diferencias con lo implementado |
-| [annotations/reviewed/README.md](annotations/reviewed/README.md) | los sets revisados: gate y referencia de drift |
+| Gate de promoción (95 imágenes de 7 videos no vistos) | **mAP 0.647**, IC 95 % 0.611–0.705 · AP50 0.930 (el release: 0.649 / 0.930) |
+| Registro de punta a punta (`registrar_modelo`) | 3,7 min, sin pasos manuales |
+| Latencia por imagen | p50 ~290 ms (8 hilos) a ~440 ms (4 hilos) |
+| Throughput | 3,3 req/s con una réplica de 8 hilos · 4,0 req/s con dos de 4 hilos |
+| Imagen del gateway / RAM del servicio | 245 MB (vs 2,3 GB con el modelo) · 647 MiB (vs 1448 con dos copias del modelo) |
+| Ataques de entrada | GIF disfrazado de JPEG → 415 · PNG de 20000×20000 → 422 sin decodificarla · sin API key → 401 · gRPC sin token → rechazado |
+| Pesos alterados en el Data Lake | inference se niega a servirlos (el SHA-256 no coincide con MLflow) |
+| Drift | tráfico normal de otros videos: sin alarma · el mismo tráfico de noche: alarma (p = 2e-56) |
 
-## Servicios
+- **El gate se mide sobre el `test`, no sobre el `val`.** Sobre el `val`, que se usó para calibrar el
+  umbral, el modelo daba 0.817: una cifra optimista que no sirve para decidir. Con 95 imágenes el IC mide
+  ±0,05, así que un candidato tiene que superar al champion por un margen mínimo sobre el mismo set.
+- **Replicar sirve para throughput, no para latencia.** A igual CPU, dos réplicas dan ~20 % más
+  requests por segundo con varios clientes; una réplica con más hilos responde más rápido a uno solo.
+- **El drift se detecta sin etiquetas, pero no mide la calidad.** El test KS separa el tráfico
+  oscurecido y no confunde videos nuevos con drift. Para medir si el modelo empeoró harían falta etiquetas.
 
-Base: [facundolucianna/amq2-service-ml](https://github.com/facundolucianna/amq2-service-ml) (remoto `upstream`).
-Solo el gateway escucha fuera de la máquina; el resto está en `127.0.0.1` ([seguridad.md](docs/seguridad.md)).
-Usuarios y contraseñas: los de `.env`, que genera `scripts/generar_env.sh`.
+  ![Distribución del brillo: referencia, tráfico normal y oscurecido](docs/figures/drift_brillo.png)
 
-| Servicio | Dónde |
-|---|---|
-| Gateway REST + GraphQL | http://localhost:8800/docs · `POST /graphql` (header `X-API-Key`) |
-| Inference (gRPC, único dueño del modelo, escalable) | `127.0.0.1:50051` · `proto/detector.proto` (metadata `authorization: Bearer <INFERENCE_TOKEN>`) |
-| Airflow | http://localhost:8080 (`airflow` / `_AIRFLOW_WWW_USER_PASSWORD`) |
-| MLflow | http://localhost:5001 |
-| MinIO | http://localhost:9001 (`minio` / `MINIO_SECRET_ACCESS_KEY`) |
-| Redpanda (Kafka) | `localhost:19092`, topic `frames`; consumidor `stream-consumer` |
-| Label Studio (`--profile labeling`) | http://localhost:8090 (`admin@vallavision.local` / `LABEL_STUDIO_PASSWORD`) |
+Detalle, decisiones y limitaciones: [docs/arquitectura.md](docs/arquitectura.md).
 
-Buckets: `data` (Data Lake por zonas, contrato §4) y `mlflow` (artefactos de MLflow).
+## Cómo funciona
 
-## Instalación
+```mermaid
+flowchart LR
+    GH[GitHub release<br/>model-v1] -->|SHA-256| REG
+    subgraph Airflow
+        REG[registrar_modelo<br/>gate + linaje]
+        RB[rollback_modelo]
+        MON[monitoreo_drift<br/>cada hora]
+    end
+    REG --> S3[(MinIO<br/>Data Lake)]
+    REG -->|versión, métricas, alias| ML[(MLflow)]
+    RB -->|champion ↔ anterior| ML
+    ML -->|champion + SHA-256| INF
+    S3 -->|pesos verificados| INF
+    APP[cliente] -->|REST + API key| GW[Gateway<br/>sin modelo]
+    GW -->|gRPC + token| INF[Inference<br/>RT-DETR, réplicas]
+    CAM[cámaras] -->|frames| RP[(Redpanda)]
+    RP --> SC[Consumidor<br/>ventanas por event time]
+    SC -->|gRPC + token| INF
+    INF -->|predicciones| S3
+    S3 --> MON
+    MON -->|alerta| S3
+```
 
-### Requisitos
+1. **Registro.** `registrar_modelo` baja los pesos del release (verifica el SHA-256 del zip), los guarda
+   en MinIO como una versión inmutable y mide mAP, AP50 e IC sobre el `test` revisado. Cada evaluación
+   queda en MLflow con el set de evaluación, su hash, el hash del código y el commit. Si supera el
+   mínimo y le gana al champion (re-evaluado sobre el mismo set), pasa a `champion`; el anterior queda
+   como `anterior` para el rollback.
+2. **Serving.** El gateway REST es el único servicio expuesto: autentica con API key, limita la tasa
+   y el tamaño, y reenvía la imagen por gRPC. `inference` es el único que tiene el modelo: valida el
+   formato real y las dimensiones antes de decodificar, carga solo pesos cuyo hash coincide con el
+   registrado y guarda cada predicción (sin la imagen).
+3. **Streaming.** Las cámaras publican frames en Redpanda (una cámara, una partición: el orden se
+   conserva). El consumidor los infiere y arma ventanas de 15 s por el instante de captura, con
+   tolerancia a frames desordenados, y alerta si la latencia supera el SLO.
+4. **Monitoreo.** `monitoreo_drift` compara cada hora las predicciones (REST y streaming) contra la
+   referencia: chi² para la cantidad de vallas por frame, KS para score, brillo y contraste, con
+   corrección de Holm. Si hay drift, deja una alerta y la corrida falla.
 
-- Docker con Compose v2 y Python 3 (para generar `.env`).
-- ~8 GB de RAM libres: el stack usa ~5 GB en reposo y el worker de Airflow carga el modelo en los DAGs.
-- ~14 GB de disco para las imágenes (Airflow 4.8 GB, MLflow 2.3 GB, inferencia 2.3 GB, Redpanda 0.6 GB, consumidor 0.6 GB) y bastante más durante el primer build.
-- El zip del dataset `billboards-2025-09-14-sur-lp` (no se versiona en git).
+La regla de diseño fue que **cada pieza tenga un consumidor o una razón operativa**. GraphQL, los RPCs
+de streaming, guardar imágenes para reetiquetar, Label Studio y el aprendizaje federado se evaluaron y
+quedaron afuera ([por qué](docs/arquitectura.md#qué-se-dejó-afuera-y-por-qué)).
 
-### Pasos
+## Cómo empezar
+
+Requisitos: Docker con Compose v2, Python 3, ~8 GB de RAM libres, ~13 GB de disco y el zip del dataset
+`billboards-2025-09-14-sur-lp` (privado, no se versiona).
 
 ```bash
 git clone https://github.com/ChristianConchari/billboard-detector-mlops.git && cd billboard-detector-mlops
@@ -59,116 +110,58 @@ scripts/generar_env.sh
 
 # 3. Levantar todo (~10 min la primera vez, por torch)
 docker compose --profile all up -d --build
-docker compose --profile all ps   # healthy salvo inference (unhealthy hasta el paso 4);
-                                  # airflow-init y minio_create_bucket terminan con Exited (0)
 
-# 4. Registrar el modelo (~4 min en CPU): baja model-v1 (verifica SHA-256), lo sube a MinIO, mide el
-#    mAP con IC sobre el test revisado, lo registra en MLflow con su linaje y, si pasa el gate, champion
+# 4. Registrar el modelo (~4 min): queda como champion si pasa el gate
 docker exec airflow-apiserver airflow dags unpause registrar_modelo
 docker exec airflow-apiserver airflow dags trigger registrar_modelo
 
-# 5. Comprobar (inference busca el champion cada 30 s)
+# 5. Probar
 set -a; . ./.env; set +a
 curl -s localhost:8800/health    # {"status":"ok","model_loaded":true}
 curl -H "X-API-Key: $GATEWAY_API_KEYS" -F image=@data/billboards-2025-09-14-sur-lp/images/<imagen>.jpg \
   localhost:8800/v1/detect
 ```
 
-Si el build falla con `ReadTimeoutError` de `files.pythonhosted.org`, es la red saturada por bajar todas las
-imágenes en paralelo: construir primero la de inferencia (`docker compose --profile all build inference`) y volver a correr el paso 3.
+Hasta el paso 4, `inference` figura como `unhealthy` (su healthcheck exige el modelo cargado). Si el
+build falla con `ReadTimeoutError` de PyPI, construir primero la imagen pesada
+(`docker compose --profile all build inference`) y repetir el paso 3. Para apagar:
+`docker compose --profile all down` (con `-v` borra también los volúmenes).
 
-Si el stack corre en otra máquina, reemplazar `localhost` por su IP solo para el gateway (lo demás escucha en `127.0.0.1`;
-usar un túnel SSH). `GATEWAY_BIND=127.0.0.1` en `.env` deja también el gateway solo local.
-
-### Apagar
-
-```bash
-docker compose --profile all down        # detiene los servicios
-docker compose --profile all down -v     # además borra volúmenes: MinIO, MLflow, Postgres, Redpanda
-```
-
-## Uso
-
-Todas las llamadas al gateway llevan `-H "X-API-Key: $GATEWAY_API_KEYS"` (con `set -a; . ./.env; set +a`).
-
-**REST.** `POST /v1/detect` (imagen), `GET /v1/model` (modelo, umbral, mAP del gate con IC y set de
-evaluación), `POST /v1/reload` (clave de `GATEWAY_ADMIN_KEYS`). Cada predicción queda en
-`s3://data/predictions/` y el 10 % de las imágenes en `raw/stream/` (para reetiquetar si hay drift).
-
-**GraphQL** (solo lectura, sin introspección; esquema en el contrato §6):
-
-```bash
-curl -H "X-API-Key: $GATEWAY_API_KEYS" -H 'Content-Type: application/json' localhost:8800/graphql \
-  -d '{"query": "{ modelo { version umbral metricas { nombre valor } } versiones { version aliases gateMap } }"}'
-```
-
-**gRPC y benchmark REST vs gRPC** (lee la clave y el token de `.env`):
-
-```bash
-uv run --with requests --with grpcio==1.84.0 --with protobuf==6.33.6 scripts/bench_rest_vs_grpc.py <imagen.jpg> -n 40 -c 1 2 4
-```
-(`scripts/gen_proto.sh` genera `vallavision/grpc_gen/`; requiere `grpcio-tools==1.81.1`.)
-
-**Streaming con broker (Redpanda).** El productor simula cámaras (un video = una cámara) y publica
-frames con su event time; el servicio `stream-consumer` los infiere y arma ventanas de 15 s por event
-time con watermark → `curated/stream_windows/`, con alertas por drift o p95 > 2 s en `monitoring/alerts/`:
-
-```bash
-uv run --with kafka-python --with pillow scripts/camara_productor.py --rate 2              # control negativo
-uv run --with kafka-python --with pillow scripts/camara_productor.py --degrade oscurecer   # control positivo
-docker logs -f billboard-detector-mlops-stream-consumer-1
-```
-
-Por defecto reproduce el `test` revisado: videos que no están en la referencia de drift. Sin broker,
-`scripts/stream_client.py` hace lo mismo por gRPC bidireccional (`DetectLive`).
-
-**DAGs.**
-
-| DAG | Para qué |
+| Servicio | Dónde |
 |---|---|
-| `registrar_modelo` | registrar y promover un modelo (gate sobre el `test` revisado, champion re-evaluado sobre el mismo set) |
-| `rollback_modelo` | volver al champion anterior (`champion` ↔ `anterior`) |
-| `monitoreo_drift` | horario: drift de las predicciones del intervalo; con drift, alerta + manifiesto de reetiquetado |
+| Gateway REST | http://localhost:8800/docs (header `X-API-Key`) |
+| Airflow | http://localhost:8080 (`airflow` / `_AIRFLOW_WWW_USER_PASSWORD` de `.env`) |
+| MLflow | http://localhost:5001 (experimento `evaluaciones`: cada evaluación con su linaje) |
+| MinIO | http://localhost:9001 (`minio` / `MINIO_SECRET_ACCESS_KEY`), bucket `data` |
+| Redpanda | `localhost:19092`, topic `frames` |
 
-**Revisión de etiquetas** (Label Studio, sobre el export de origen):
+Solo el gateway escucha fuera de la máquina; el resto está en `127.0.0.1`. Uso detallado (REST, gRPC,
+streaming, DAGs, escalado, tests): [docs/uso.md](docs/uso.md). Demo guiada para grabar:
+`scripts/demo.sh` ([guion](docs/demo.md)).
 
-```bash
-docker compose --profile labeling up -d
-python scripts/revision_etiquetas.py importar   # proyecto + imágenes con cajas pendientes
-# en http://localhost:8090: dejar la caja = confirmar, moverla = ajustar, borrarla = rechazar; Submit
-python scripts/revision_etiquetas.py exportar   # -> data/<dataset>/annotations_revisadas/
+## Estructura del repositorio
+
+```
+airflow/dags/          registrar_modelo, rollback_modelo, monitoreo_drift
+vallavision/           paquete compartido por los DAGs y los servicios:
+                       detector, servicio de inferencia, gate, drift, ventanas, integridad
+dockerfiles/           imágenes: gateway, inference, stream (consumidor), airflow, mlflow;
+                       minio/init.sh crea un usuario por servicio con mínimo privilegio
+proto/                 contrato gRPC
+annotations/reviewed/  sets con cajas revisadas: gate (test) y referencia de drift (val)
+scripts/               generar_env, demo, ver_detecciones, camara_productor, benchmark
+tests/                 72 tests sin el stack (corren en el CI)
+docs/                  arquitectura, contrato, seguridad, uso, demo, estado
 ```
 
-**Escalar la inferencia** (el gateway reparte entre réplicas; a igual CPU da ~20 % más throughput, ver arquitectura.md):
+Base de la infraestructura: [facundolucianna/amq2-service-ml](https://github.com/facundolucianna/amq2-service-ml).
 
-```bash
-docker compose -f docker-compose.yaml -f docker-compose.scale.yaml --profile all up -d --scale inference=2
-```
+## Documentación
 
-**Tests** (sin el stack): `pip install -r requirements-dev.txt` y `pytest tests`.
-Los corre el CI (`.github/workflows/ci.yml`), junto con `docker compose config` y la compilación de los DAGs.
-
-## Estructura
-
-| Ruta | Qué hay |
-|---|---|
-| `vallavision/` | Paquete compartido: `detector.py` (RT-DETR + pyfunc), `service.py` (carga verificada del champion, validación, persistencia), `grpc_server.py` (interceptor de token, streams), `validation.py` |
-| `vallavision/drift.py` · `promotion.py` · `streaming.py` · `integrity.py` | drift (chi²/KS + Holm), gate y bootstrap, ventanas por event time, hashes y commit |
-| `vallavision/stream_consumer.py` | consumidor de Redpanda |
-| `airflow/dags/` | `registrar_modelo`, `rollback_modelo`, `monitoreo_drift` |
-| `dockerfiles/gateway/` | Gateway REST + GraphQL: FastAPI sin torch (auth, rate limit, límites) |
-| `dockerfiles/inference/` · `dockerfiles/stream/` | inferencia (torch + modelo, gRPC) · consumidor de streaming |
-| `dockerfiles/minio/init.sh` | buckets y usuarios de MinIO con mínimo privilegio |
-| `annotations/reviewed/` | sets revisados versionados (gate y referencia de drift) |
-| `scripts/` | `generar_env.sh`, `camara_productor.py`, `stream_client.py`, `bench_rest_vs_grpc.py`, `revision_etiquetas.py`, `gen_proto.sh` |
-| `proto/detector.proto` | contrato gRPC |
-
-## Operación
-
-- **Airflow CLI:** `docker exec airflow-apiserver airflow <comando>` (por ejemplo `airflow dags list-import-errors`).
-- **MinIO desde scripts locales:** `AWS_ACCESS_KEY_ID=minio`, `AWS_SECRET_ACCESS_KEY=$MINIO_SECRET_ACCESS_KEY`,
-  `AWS_ENDPOINT_URL_S3=http://localhost:9000` (y `MLFLOW_S3_ENDPOINT_URL` igual para MLflow).
-- **Alertas:** `monitoring/alerts/` en MinIO (`drift`, `error` técnico, `stream`).
-- **Diagnóstico:** un `503` del gateway puede ser "sin champion", "falló la carga" o "pesos alterados" (inference no
-  sirve pesos cuyo SHA-256 no coincide con MLflow); mirar `docker logs billboard-detector-mlops-inference-1`.
-  Más trampas conocidas en `docs/estado-y-pendientes.md`.
+- [Arquitectura](docs/arquitectura.md): decisiones, resultados medidos, qué se dejó afuera y limitaciones.
+- [Contrato](docs/contrato.md): REST, gRPC, streaming, layout del Data Lake y DAGs.
+- [Seguridad](docs/seguridad.md): superficie expuesta y tabla de riesgos y controles (SAIF).
+- [Uso](docs/uso.md): API, streaming, DAGs, escalado, tests y operación.
+- [Sets revisados](annotations/reviewed/README.md): por qué se evalúa con estas anotaciones y no con las del export.
+- [Estado y pendientes](docs/estado-y-pendientes.md): cómo retomar en otra máquina y trampas conocidas.
+- [Alcance del Hito #1](docs/alcance.md): el diseño original y en qué cambió.

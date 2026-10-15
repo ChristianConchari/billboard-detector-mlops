@@ -25,21 +25,22 @@ def test_cada_camara_tiene_su_watermark():
     assert w.add("cam2", 1000, "z") == [("cam2", 0, 1000, ["y"])]
 
 
-def test_reporte_de_ventana_con_alertas(monkeypatch):
-    import random
+def test_cierre_por_inactividad():
+    w = TumblingWindows(size_ms=1000, allowed_lateness_ms=200)
+    w.add("cam1", 100, "a")
+    w.add("cam1", 1100, "b")
+    w.add("cam2", 100, "c")
+    # cam1 dejó de transmitir: sus ventanas se cierran aunque el watermark no haya pasado
+    assert w.flush_key("cam1") == [("cam1", 0, 1000, ["a"]), ("cam1", 1000, 2000, ["b"])]
+    assert w.add("cam1", 1500, "tarde") == [] and w.late["cam1"] == 1
+    assert w.flush() == [("cam2", 0, 1000, ["c"])]
 
-    from vallavision import drift, stream_consumer
 
-    rnd = random.Random(0)
+def test_reporte_de_ventana_y_alerta_de_slo():
+    from vallavision import stream_consumer
 
-    def ev(brightness, latency):
-        return {"latency_ms": latency, "features": {"n_detections": rnd.randint(0, 2), "score_mean": rnd.uniform(0.4, 0.9),
-                                                    "brightness": rnd.gauss(brightness, 0.05),
-                                                    "contrast": rnd.gauss(0.2, 0.03)}}
-
-    reference = drift.build_reference([ev(0.5, 0)["features"] for _ in range(200)])
-    ok = stream_consumer.window_report("cam1", 0, 15000, [ev(0.5, 400) for _ in range(30)], 0, reference)
-    assert ok["frames"] == 30 and ok["throughput_fps"] == 2.0 and ok["drift"] is False and ok["alerts"] == []
-    bad = stream_consumer.window_report("cam1", 0, 15000, [ev(0.2, 2500) for _ in range(30)], 3, reference)
-    assert bad["late_frames"] == 3 and "brightness" in bad["drift_features"]
-    assert any("drift" in a for a in bad["alerts"]) and any("p95" in a for a in bad["alerts"])
+    ok = stream_consumer.window_report("cam1", 0, 15000, [{"latency_ms": 400, "detections": 2}] * 30, 0, slo_ms=2000)
+    assert ok["frames"] == 30 and ok["throughput_fps"] == 2.0 and ok["detections_per_frame"] == 2
+    assert ok["latency_ms_p95"] == 400 and ok["alerts"] == []
+    slow = stream_consumer.window_report("cam1", 0, 15000, [{"latency_ms": 2500, "detections": 1}] * 20, 3, slo_ms=2000)
+    assert slow["late_frames"] == 3 and slow["alerts"] == ["latencia p95 2500 ms > SLO 2000 ms"]

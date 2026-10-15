@@ -27,5 +27,5 @@ jobs:
       - name: docker compose config con un .env generado
         run: |
           scripts/generar_env.sh
-          docker compose --profile all --profile labeling config -q
+          docker compose --profile all config -q
           docker compose -f docker-compose.yaml -f docker-compose.scale.yaml --profile all config -q

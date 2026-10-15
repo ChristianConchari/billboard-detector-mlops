@@ -2,6 +2,3 @@ kafka-python==3.0.11
 grpcio==1.84.0
 protobuf==6.33.6
 boto3==1.43.114
-pillow==12.3.0
-numpy==2.5.4
-scipy==1.18.1

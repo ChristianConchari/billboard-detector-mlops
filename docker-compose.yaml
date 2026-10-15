@@ -159,7 +159,6 @@ services:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minio}
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_ACCESS_KEY:?falta en .env}
       - INFERENCE_S3_SECRET=${INFERENCE_S3_SECRET:?falta en .env}
-      - GATEWAY_S3_SECRET=${GATEWAY_S3_SECRET:?falta en .env}
       - STREAM_S3_SECRET=${STREAM_S3_SECRET:?falta en .env}
       - BUCKET=${DATA_REPO_BUCKET_NAME:-data}
       - MLFLOW_BUCKET=${MLFLOW_BUCKET_NAME:-mlflow}
@@ -200,7 +199,7 @@ services:
       timeout: 10s
       retries: 3
 
-  # Gateway REST + GraphQL: único servicio expuesto fuera de la máquina. Sin modelo ni torch:
+  # Gateway REST: único servicio expuesto fuera de la máquina. Sin modelo ni torch:
   # autentica (API key), limita tasa y tamaño, valida y reenvía por gRPC a `inference`.
   gateway:
     restart: always
@@ -225,12 +224,6 @@ services:
       - GATEWAY_API_KEYS=${GATEWAY_API_KEYS:?falta en .env}
       - GATEWAY_ADMIN_KEYS=${GATEWAY_ADMIN_KEYS:?falta en .env}
       - GATEWAY_RATE_LIMIT_PER_MIN=${GATEWAY_RATE_LIMIT_PER_MIN:-600}
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-      # Usuario de MinIO de solo lectura sobre predictions/ (GraphQL)
-      - AWS_ACCESS_KEY_ID=gateway
-      - AWS_SECRET_ACCESS_KEY=${GATEWAY_S3_SECRET:?falta en .env}
-      - AWS_ENDPOINT_URL_S3=http://s3:9000
-      - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
     healthcheck:
       # Sano si alcanza a `inference` (tenga o no champion); /health dice si hay modelo
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8800/livez', timeout=5)"]
@@ -267,7 +260,7 @@ services:
     networks:
       - backend
     environment:
-      # Usuario de MinIO: lee models/ y referencias, escribe predictions/ y raw/stream/
+      # Usuario de MinIO: lee models/, escribe predictions/
       - AWS_ACCESS_KEY_ID=inference
       - AWS_SECRET_ACCESS_KEY=${INFERENCE_S3_SECRET:?falta en .env}
       - AWS_ENDPOINT_URL_S3=http://s3:9000
@@ -275,8 +268,6 @@ services:
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
       - INFERENCE_TOKEN=${INFERENCE_TOKEN:?falta en .env}
-      # Fracción de imágenes que se guardan en raw/stream/ (reetiquetado si hay drift)
-      - PERSIST_IMAGES_RATIO=${PERSIST_IMAGES_RATIO:-0.1}
       # Un forward a la vez por réplica; el paralelismo viene de las réplicas
       - INFERENCE_CONCURRENCY=${INFERENCE_CONCURRENCY:-1}
       - TORCH_NUM_THREADS=${TORCH_NUM_THREADS:-4}
@@ -326,7 +317,7 @@ services:
       start_period: 20s
       retries: 5
 
-  # Consumidor: Redpanda → inference → ventanas por event time → curated/stream_windows/
+  # Consumidor: Redpanda → inference → métricas por ventana de event time → curated/stream_windows/
   stream-consumer:
     restart: always
     build:
@@ -353,32 +344,13 @@ services:
       - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
       - WINDOW_MS=${STREAM_WINDOW_MS:-15000}
       - ALLOWED_LATENESS_MS=${STREAM_ALLOWED_LATENESS_MS:-2000}
+      - IDLE_FLUSH_S=${STREAM_IDLE_FLUSH_S:-10}
       - LATENCY_SLO_MS=${STREAM_LATENCY_SLO_MS:-2000}
     deploy:
       resources:
         limits:
           cpus: "1"
           memory: 512M
-
-  # Revisión de etiquetas (scripts/revision_etiquetas.py). Solo con --profile labeling.
-  label-studio:
-    image: heartexlabs/label-studio:1.23.1
-    container_name: label_studio
-    profiles:
-      - labeling
-    ports:
-      - "127.0.0.1:${LABEL_STUDIO_PORT:-8090}:8080"
-    networks:
-      - frontend
-    environment:
-      - LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
-      - LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/datasets
-      - LABEL_STUDIO_USERNAME=${LABEL_STUDIO_USERNAME:-admin@vallavision.local}
-      - LABEL_STUDIO_PASSWORD=${LABEL_STUDIO_PASSWORD:?falta en .env}
-      - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=true
-    volumes:
-      - ./data:/datasets:ro
-      - label_studio_data:/label-studio/data
 
   airflow-apiserver:
     <<: *airflow-common
@@ -582,4 +554,3 @@ volumes:
   db_data:
   minio_data:
   redpanda_data:
-  label_studio_data:

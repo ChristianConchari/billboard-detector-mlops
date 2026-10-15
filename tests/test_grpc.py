@@ -19,7 +19,7 @@ def stub():
                                        "labels": ["billboard"], "score_threshold": 0.15,
                                        "metrics": {"gate_map": 0.5}, "eval_set": "reviewed/test.json@abc"})
     service.persisted = []
-    service.persist = lambda r, image=None: service.persisted.append(r["request_id"])
+    service.persist = lambda r: service.persisted.append(r["request_id"])
     server = build_server(service, max_workers=4)
     port = server.add_insecure_port("localhost:0")
     server.start()
@@ -47,28 +47,9 @@ def test_detect_con_umbral(stub):
     assert len(s.Detect(pb.DetectRequest(image=png(), score_threshold=0.5)).detections) == 1
 
 
-def test_detect_stream_en_orden(stub):
+def test_frame_id_vuelve_en_la_respuesta(stub):
     s, _ = stub
-    batch = pb.DetectBatchRequest(frames=[pb.DetectRequest(image=png((w, 10))) for w in (10, 20, 30)])
-    assert [r.image.width for r in s.DetectStream(batch)] == [10, 20, 30]
-
-
-def test_detect_stream_frame_invalido_no_corta_el_lote(stub):
-    s, service = stub
-    frames = [pb.DetectRequest(image=png((10, 10)), frame_id="a"),
-              pb.DetectRequest(image=b"basura", frame_id="b"),
-              pb.DetectRequest(image=png((10, 10), "BMP"), frame_id="c"),
-              pb.DetectRequest(image=png((30, 10)), frame_id="d")]
-    out = list(s.DetectStream(pb.DetectBatchRequest(frames=frames)))
-    assert [r.frame_id for r in out] == ["a", "b", "c", "d"]
-    assert [r.error.status for r in out] == [0, 422, 415, 0]
-    assert out[3].image.width == 30 and len(service.persisted) == 2
-
-
-def test_detect_live_bidireccional(stub):
-    s, _ = stub
-    frames = (pb.DetectRequest(image=png((w, 10)), frame_id=str(w)) for w in (10, 20, 30))
-    assert [(r.frame_id, r.image.width) for r in s.DetectLive(frames)] == [("10", 10), ("20", 20), ("30", 30)]
+    assert s.Detect(pb.DetectRequest(image=png(), frame_id="cam1-7")).frame_id == "cam1-7"
 
 
 def test_bmp_por_grpc_415_invalid_argument(stub):
@@ -114,7 +95,7 @@ def test_token_obligatorio():
     service = DetectionService()
     service.set_model(Fake(), {"name": "m", "version": "1", "alias": "champion", "labels": [],
                                "score_threshold": 0.1, "metrics": {}})
-    service.persist = lambda r, image=None: None
+    service.persist = lambda r: None
     server = build_server(service, token="s3cr3t", max_workers=2)
     port = server.add_insecure_port("localhost:0")
     server.start()
@@ -126,7 +107,7 @@ def test_token_obligatorio():
                     st.GetModel(pb.GetModelRequest(), metadata=md)
                 assert e.value.code() == grpc.StatusCode.UNAUTHENTICATED
             with pytest.raises(grpc.RpcError) as e:
-                list(st.DetectLive(iter([pb.DetectRequest(image=png())])))
+                st.Detect(pb.DetectRequest(image=png()))
             assert e.value.code() == grpc.StatusCode.UNAUTHENTICATED
             ok = st.GetModel(pb.GetModelRequest(), metadata=[("authorization", "Bearer s3cr3t")])
             assert ok.loaded

@@ -10,13 +10,12 @@ El detalle cronológico está en la bitácora del vault (`Second brain/10 Projec
 | Instalación desde cero (`generar_env.sh` + `up --build` + DAG) | ✅ |
 | `registrar_modelo`: gate sobre el `test` revisado con IC, champion re-evaluado, linaje en MLflow | ✅ 3,7 min; mAP 0,647 (IC 0,611–0,705), igual al release |
 | `rollback_modelo` | ✅ en el código; sin probar en vivo (hace falta un segundo champion) |
-| Gateway REST + GraphQL con API key, rate limit y límites de tamaño | ✅ |
-| Inference gRPC con token, verificación de SHA-256 de los pesos, `DetectLive` bidireccional | ✅ |
-| Redpanda + `stream-consumer` (ventanas por event time) | ✅ control negativo sin drift, positivo con drift y alerta |
-| `monitoreo_drift`: Parquet, chi²/KS + Holm, alerta y manifiesto de reetiquetado | ✅ |
+| Gateway REST con API key, rate limit y límites de tamaño | ✅ |
+| Inference gRPC (interno, unario) con token y verificación de SHA-256 de los pesos | ✅ |
+| Redpanda + `stream-consumer` (métricas por ventana de event time, cierre por inactividad) | ✅ |
+| `monitoreo_drift`: Parquet, chi²/KS + Holm y alerta | ✅ control negativo sin drift, positivo con drift y alerta |
 | MinIO con un usuario por servicio; puertos de administración solo en `127.0.0.1` | ✅ |
-| Label Studio (`--profile labeling`) | ✅ servicio restaurado en compose; flujo de `revision_etiquetas.py` sin re-probar |
-| Tests | ✅ 83; CI en `.github/workflows/ci.yml` (sin correr todavía en GitHub) |
+| Tests | ✅ 72; CI en verde en GitHub (tests + `docker compose config`) |
 
 ## Mediciones de escalado
 
@@ -45,11 +44,11 @@ contraseña vieja: `docker compose --profile all down -v` y volver a levantar.
 ## Pendientes, en orden sugerido
 
 1. Slides y defensa (sesión 8); confirmar con el docente el trabajo individual (el reglamento pide 2–6).
-2. Ver el CI correr en GitHub tras el push.
-3. Probar `rollback_modelo` en vivo y el flujo de Label Studio con el servicio restaurado.
-4. Opcionales: desenfoque de caras y patentes, referencias de drift por cámara, ONNX/int8, TLS y MLflow con usuarios.
+2. Probar `rollback_modelo` en vivo (hace falta un segundo champion).
+3. Opcionales: referencias de drift por cámara, ONNX/int8, TLS y MLflow con usuarios.
 
-Fuera de alcance por decisión: aprendizaje federado.
+Fuera de alcance por decisión (sin consumidor o sin caso real; ver arquitectura.md): GraphQL, RPCs de streaming,
+drift en el consumidor, muestreo de imágenes y reetiquetado, Label Studio, aprendizaje federado.
 
 ## Trampas conocidas
 

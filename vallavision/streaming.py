@@ -45,6 +45,20 @@ class TumblingWindows:
                 closed.append((k, start, start + self.size_ms, self._open.pop((k, start))))
         return closed
 
+    def flush_key(self, key):
+        """Cierra las ventanas abiertas de una clave (la cámara dejó de mandar frames).
+
+        El watermark solo avanza con eventos nuevos: sin esto, las últimas ventanas de una
+        cámara que se apaga quedarían abiertas hasta que vuelva a transmitir. Después del
+        cierre, lo que llegue para esas ventanas cuenta como tardío.
+        """
+        closed = [(k, s, s + self.size_ms, ev) for (k, s), ev in sorted(self._open.items()) if k == key]
+        for k, s, _, _ in closed:
+            del self._open[(k, s)]
+        if closed:
+            self._watermark[key] = max(self._watermark.get(key, 0), closed[-1][2])
+        return closed
+
     def flush(self):
         """Cierra todas las ventanas abiertas (fin del stream)."""
         closed = [(k, s, s + self.size_ms, ev) for (k, s), ev in sorted(self._open.items())]

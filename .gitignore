@@ -170,3 +170,6 @@ vallavision/grpc_gen/
 
 # Secretos locales: se generan con scripts/generar_env.sh desde .env.example
 .env
+
+# Entorno de los scripts de la demo (scripts/demo.sh)
+.venv-demo/

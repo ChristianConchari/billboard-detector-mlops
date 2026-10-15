@@ -1,6 +1,6 @@
 """Servicio de inferencia de VallaVision: único dueño del modelo (docs/contrato.md §3).
 
-Lo consumen el gateway REST, el consumidor de streaming y clientes gRPC internos. Se puede
+Lo consumen el gateway REST y el consumidor de streaming (servicio interno). Se puede
 escalar con réplicas: cada una carga su copia del modelo y atiende `INFERENCE_CONCURRENCY`
 forward a la vez (1 por defecto: en CPU un forward ya usa los hilos que tiene).
 
@@ -63,7 +63,6 @@ def model_info(service):
         score_threshold=info["score_threshold"],
         metrics=info["metrics"],
         eval_set=info.get("eval_set", ""),
-        weights_uri=info.get("weights_uri", ""),
     )
 
 
@@ -82,14 +81,9 @@ class TokenInterceptor(grpc.ServerInterceptor):
         sent = dict(handler_call_details.invocation_metadata or ()).get("authorization", "")
         if hmac.compare_digest(sent.encode(), self._expected):
             return continuation(handler_call_details)
-        handler = continuation(handler_call_details)
-        if handler is None:
+        if continuation(handler_call_details) is None:
             return None
-        if handler.request_streaming and handler.response_streaming:
-            return grpc.stream_stream_rpc_method_handler(lambda it, ctx: self._deny(None, ctx))
-        if handler.response_streaming:
-            return grpc.unary_stream_rpc_method_handler(self._deny)
-        return grpc.unary_unary_rpc_method_handler(self._deny)
+        return grpc.unary_unary_rpc_method_handler(self._deny)  # todos los RPCs son unarios
 
 
 class DetectorServicer(pb_grpc.DetectorServicer):
@@ -117,7 +111,7 @@ class DetectorServicer(pb_grpc.DetectorServicer):
             self._slots.release()
         if not context.is_active():
             raise Cancelled()
-        self.service.persist(response, request.image)
+        self.service.persist(response)
         return response
 
     def Detect(self, request, context):
@@ -134,28 +128,6 @@ class DetectorServicer(pb_grpc.DetectorServicer):
         except Exception as e:  # noqa: BLE001 — no filtrar detalles internos al cliente
             print(f"error interno en Detect: {type(e).__name__}: {e}", flush=True)
             context.abort(grpc.StatusCode.INTERNAL, "error interno del servicio de inferencia")
-
-    def _stream(self, requests, context):
-        """Una respuesta por frame, en orden; un frame inválido trae `error` y no corta."""
-        for request in requests:
-            try:
-                yield to_proto(self._infer(request, context), request.frame_id)
-            except DetectionError as e:
-                yield pb.DetectResponse(frame_id=request.frame_id,
-                                        error=pb.Error(status=e.status, message=e.message))
-            except ModelNotLoaded:
-                context.abort(grpc.StatusCode.UNAVAILABLE, "no hay modelo champion cargado")
-            except Cancelled:
-                return
-            except Exception as e:  # noqa: BLE001
-                print(f"error interno en stream: {type(e).__name__}: {e}", flush=True)
-                context.abort(grpc.StatusCode.INTERNAL, "error interno del servicio de inferencia")
-
-    def DetectStream(self, request, context):
-        yield from self._stream(request.frames, context)
-
-    def DetectLive(self, request_iterator, context):
-        yield from self._stream(request_iterator, context)
 
     def GetModel(self, request, context):
         return model_info(self.service)

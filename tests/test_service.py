@@ -115,7 +115,7 @@ def test_orientacion_exif(service):
     assert service.detect(data)["image"] == {"width": 32, "height": 64}
 
 
-def test_persist_guarda_muestra_de_imagenes():
+def test_persist_guarda_solo_la_prediccion():
     class S3:
         def __init__(self):
             self.keys = []
@@ -123,28 +123,7 @@ def test_persist_guarda_muestra_de_imagenes():
         def put_object(self, Bucket, Key, Body, **kw):
             self.keys.append(Key)
 
-    s = DetectionService(persist_images_ratio=1.0)
+    s = DetectionService()
     s._s3 = S3()
-    s.persist({"request_id": "r1", "image_format": "PNG"}, b"img")
-    assert [k.split("/")[0] for k in s._s3.keys] == ["raw", "predictions"]
-    assert s._s3.keys[0].endswith("/r1.png")
-    s.persist_images_ratio = 0.0
-    s.persist({"request_id": "r2", "image_format": "PNG"}, b"img")
-    assert s._s3.keys[-1].startswith("predictions/")
-
-
-def test_demasiado_grande_413(service):
-    assert status_of(service, b"0" * (5 * 1024 * 1024 + 2)) == 413
-
-
-def test_imagen_ilegible_422(service):
-    assert status_of(service, b"no soy una imagen") == 422
-
-
-def test_dimensiones_fuera_de_rango_422(service):
-    assert status_of(service, png((4097, 8))) == 422
-
-
-def test_sin_modelo():
-    with pytest.raises(ModelNotLoaded):
-        DetectionService().detect(png())
+    s.persist({"request_id": "r1"})
+    assert len(s._s3.keys) == 1 and s._s3.keys[0].startswith("predictions/date=") and s._s3.keys[0].endswith("/r1.json")

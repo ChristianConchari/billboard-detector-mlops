@@ -1,7 +1,7 @@
 # Contrato del servicio de detección
 
-Define la forma de entrada/salida del detector **una sola vez**, para que REST, GraphQL,
-gRPC, streaming y los resultados en MinIO hablen el mismo idioma. El modelo detrás puede
+Define la forma de entrada/salida del detector **una sola vez**, para que REST, gRPC,
+streaming y los resultados en MinIO hablen el mismo idioma. El modelo detrás puede
 cambiar sin romper a ningún consumidor. Controles de seguridad: [seguridad.md](seguridad.md).
 
 ## 1. Modelo
@@ -88,22 +88,18 @@ Fuerza la recarga del `champion` (inference también lo chequea cada 30 s).
 
 Solo en la red interna de Docker (publicado en `127.0.0.1:50051` para los scripts locales) y con
 token: metadata `authorization: Bearer <INFERENCE_TOKEN>`; sin token → `UNAUTHENTICATED`.
-La imagen viaja como `bytes` (sin base64). `.proto` en `proto/detector.proto`
+Es un servicio **interno**: lo llaman el gateway y el consumidor de streaming, así que solo tiene
+RPCs unarios. La imagen viaja como `bytes` (sin base64). `.proto` en `proto/detector.proto`
 (`scripts/gen_proto.sh` genera el código). Mensajes de hasta 8 MB.
 
 | RPC | Qué hace |
 |---|---|
-| `Detect` | una imagen → sus detecciones |
-| `DetectStream` | lote de frames en un mensaje → una respuesta por frame (server-streaming) |
-| `DetectLive` | **bidireccional**: el cliente manda frames a medida que los produce y recibe una respuesta por frame, en orden; sin límite de lote |
-| `GetModel` | modelo cargado (versión, alias, etiquetas, umbral, métricas del gate, `eval_set`, `weights_uri`); `loaded=false` si no hay champion |
+| `Detect` | una imagen → sus detecciones; `frame_id` (opcional) vuelve igual en la respuesta |
+| `GetModel` | modelo cargado (versión, alias, etiquetas, umbral, métricas del gate, `eval_set`); `loaded=false` si no hay champion |
 | `Reload` | busca el champion en MLflow; `UNAVAILABLE` si no puede (sin detalles) |
 
-`DetectRequest.frame_id` (opcional) vuelve igual en la respuesta. En `DetectStream` y `DetectLive`
-un frame inválido **no corta el stream**: su respuesta trae `error {status, message}` con el código
-HTTP del contrato (413/415/422) y el resto sigue.
-
-Errores de `Detect`: 413 → `RESOURCE_EXHAUSTED`, 415/422 → `INVALID_ARGUMENT`, sin champion →
+Errores de `Detect`: 413 → `RESOURCE_EXHAUSTED`, 415/422 → `INVALID_ARGUMENT` (el código del
+contrato viaja en el trailer `http-status`, para distinguir 415 de 422), sin champion →
 `UNAVAILABLE`, cliente que se fue → `CANCELLED`, inesperado → `INTERNAL` (sin detalles). Si el
 cliente cancela o vence su deadline mientras espera turno, el frame no se infiere ni se persiste.
 
@@ -121,22 +117,19 @@ prefijos ([seguridad.md](seguridad.md)).
 ```
 s3://data/
   raw/images/<dataset>/<split>/…                  imágenes originales (split del export de origen)
-  raw/stream/date=YYYY-MM-DD/<request_id>.jpg     muestra de las imágenes servidas (PERSIST_IMAGES_RATIO, 10 %)
   models/billboard-detector/v<N>/…                pesos + metadata.json (sha256 del checkpoint y del zip); v<N> inmutable
   predictions/date=YYYY-MM-DD/<request_id>.json   cada inferencia: §2 + campos de monitoreo (abajo)
   curated/eval/<dataset>/<nombre>-<sha12>.json    sets revisados de gate y referencia (inmutables, sha en el nombre)
   curated/reference/billboard-detector/v<N>.json  features del `val` revisado por versión (referencia de drift)
   curated/predictions/model=v<M>/date=…/<intervalo>.parquet   features por frame compactadas por monitoreo_drift
   curated/stream_windows/date=…/<cámara>-<inicio>.json        métricas por ventana del consumidor de streaming
-  curated/relabel/<timestamp>.json                imágenes a reetiquetar cuando hay drift
   monitoring/drift/<timestamp>.json               reportes de monitoreo_drift
-  monitoring/alerts/<timestamp>-<tipo>.json       alertas: drift, error técnico, stream (drift o SLO)
+  monitoring/alerts/<timestamp>-<tipo>.json       alertas: drift, error técnico, stream (SLO de latencia)
 ```
 
 Campos de monitoreo en `predictions/` (REST y gRPC no los devuelven): `inference_ms` (solo el
 forward), `score_threshold` (el efectivo), `threshold_is_default`, `image_stats` (`brightness` y
-`contrast` de la luminancia, 0–1), `image_format`, `created_at` e `image_key` si la imagen quedó en
-`raw/stream/`.
+`contrast` de la luminancia, 0–1) y `created_at`. Las imágenes **no se guardan** (caras y patentes).
 
 Bucket `mlflow`: artefactos de MLflow (lo gestiona MLflow, no se escribe a mano).
 
@@ -146,30 +139,15 @@ Bucket `mlflow`: artefactos de MLflow (lo gestiona MLflow, no se escribe a mano)
 |---|---|
 | `registrar_modelo` | descarga pesos (SHA-256 del zip obligatorio) → `models/…/v<N>/` → evalúa sobre el `test` revisado: mAP, AP50 e IC 95 % → run en el experimento `evaluaciones` con el set como artefacto, su sha256, el hash del código y el commit → registra en MLflow → re-evalúa el champion sobre el mismo set → `champion` si mAP ≥ `min_map` (0.5) y supera al champion por `min_improvement` (0.01); si no, `challenger`. El saliente queda como `anterior` |
 | `rollback_modelo` | intercambia `champion` y `anterior` |
-| `monitoreo_drift` | horario, sobre `data_interval`: compacta las predicciones del champion **con umbral calibrado** a Parquet → chi² (`n_detections`) y KS (`score_mean`, `brightness`, `contrast`) con corrección de Holm (α=0.01 por ventana) → reporte; con drift: alerta + manifiesto de reetiquetado y la tarea falla con `DriftDetected`. Un error técnico deja una alerta `error`. Con menos de 20 frames no emite veredicto |
+| `monitoreo_drift` | horario, sobre `data_interval`: compacta las predicciones del champion **con umbral calibrado** a Parquet → chi² (`n_detections`) y KS (`score_mean`, `brightness`, `contrast`) con corrección de Holm (α=0.01 por ventana) → reporte; con drift: alerta `drift` y la corrida falla con `DriftDetected`. Un error técnico deja una alerta `error`. Con menos de 20 frames no emite veredicto |
 
-## 6. GraphQL (Sesión 2, `POST /graphql` en el gateway)
-
-Solo lectura, con `X-API-Key`. Sin introspección (el esquema se documenta acá) y con límite de
-profundidad. `limite` se acota a 100.
-
-```graphql
-type Query {
-  modelo: Modelo                                  # champion cargado en inference
-  versiones: [VersionModelo!]!                    # registro de MLflow, más nueva primero
-  predicciones(fecha: String!, limite: Int = 20, scoreMinimo: Float = 0): [Prediccion!]!
-}
-type Modelo { nombre version alias etiquetas umbral conjuntoEvaluacion metricas { nombre valor } }
-type VersionModelo { version aliases weightsUri conjuntoEvaluacion gateMap creada }
-type Prediccion { requestId versionModelo creada ancho alto latenciaMs detecciones { etiqueta score caja } }
-```
-
-## 7. Streaming con broker (Sesión 4)
+## 6. Streaming con broker (Sesión 4)
 
 Redpanda (API de Kafka), topic `frames` con 3 particiones. Mensaje: clave = id de cámara (todos sus
 frames en la misma partición, en orden), valor = JPEG, encabezados `event_time_ms` (instante de
 captura) y `frame_id`. El consumidor (`stream-consumer`, grupo `detector`) infiere con `Detect`,
 agrupa por cámara en ventanas tumbling de 15 s por event time con watermark (tolerancia 2 s; lo que
-llega después se cuenta como tardío) y deja en `curated/stream_windows/` frames, throughput,
-latencia p50/p95, detecciones por frame, frames tardíos y drift. Alerta si hay drift o p95 > 2 s.
-Semántica at-least-once (commit después de inferir).
+llega después se cuenta como tardío; una cámara sin frames por 10 s cierra sus ventanas) y deja en
+`curated/stream_windows/` frames, throughput, latencia p50/p95, detecciones por frame y frames
+tardíos. Alerta si p95 > 2 s. El drift no se calcula acá sino en `monitoreo_drift`, que ve todo el
+tráfico. Semántica at-least-once (commit después de inferir).

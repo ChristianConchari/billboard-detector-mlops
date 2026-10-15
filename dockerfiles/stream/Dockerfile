@@ -1,5 +1,5 @@
 # Consumidor de streaming: Redpanda → inference (gRPC) → ventanas por event time.
-# Sin torch: solo kafka-python, gRPC y las estadísticas de drift. Contexto de build: raíz del repo.
+# Sin torch ni dependencias numéricas: kafka-python, gRPC y boto3. Contexto de build: raíz del repo.
 
 FROM python:3.12-slim AS proto
 WORKDIR /build
@@ -12,7 +12,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY dockerfiles/stream/requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
-COPY vallavision/__init__.py vallavision/drift.py vallavision/streaming.py vallavision/stream_consumer.py /app/vallavision/
+COPY vallavision/__init__.py vallavision/streaming.py vallavision/stream_consumer.py /app/vallavision/
 COPY --from=proto /build/vallavision/grpc_gen /app/vallavision/grpc_gen
 ENV PYTHONPATH=/app
 CMD ["python", "-m", "vallavision.stream_consumer"]

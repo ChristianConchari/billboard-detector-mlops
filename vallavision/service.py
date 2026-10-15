@@ -2,13 +2,12 @@
 
 Carga el modelo con alias `champion` desde MLflow/MinIO (verificando el SHA-256 de los
 pesos), valida la imagen, arma la respuesta del contrato §2 y persiste cada predicción
-en `predictions/` y una muestra de las imágenes en `raw/stream/` (§4).
+en `predictions/` (§4). Las imágenes no se guardan (caras y patentes; ver docs/seguridad.md).
 """
 
 import io
 import json
 import os
-import random
 import tempfile
 import threading
 import time
@@ -33,11 +32,8 @@ MODEL_NAME = os.getenv("MODEL_NAME", "billboard-detector")
 ALIAS = os.getenv("MODEL_ALIAS", "champion")
 BUCKET = os.getenv("DATA_REPO_BUCKET_NAME", "data")
 MLFLOW_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
-# Fracción de imágenes que se guardan en raw/stream/ para reetiquetar si hay drift
-PERSIST_IMAGES_RATIO = float(os.getenv("PERSIST_IMAGES_RATIO", "0.1"))
 # Métricas del run de evaluación que se publican en /v1/model (las de gate)
 PUBLIC_METRICS = ("gate_map", "gate_map_50", "gate_map_ci_low", "gate_map_ci_high")
-_EXT = {"JPEG": "jpg", "PNG": "png"}
 
 
 def _s3():
@@ -51,13 +47,12 @@ class IntegrityError(Exception):
 
 
 class DetectionService:
-    def __init__(self, persist_images_ratio=PERSIST_IMAGES_RATIO):
+    def __init__(self):
         # (detector, info) se reemplaza entero: una request nunca ve el detector de una
         # versión con la info de otra
         self._model = None
         self._load_lock = threading.Lock()
         self._s3 = None
-        self.persist_images_ratio = persist_images_ratio
 
     @property
     def loaded(self):
@@ -114,7 +109,6 @@ class DetectionService:
                 "score_threshold": detector.default_threshold,
                 "metrics": {k: v for k, v in metrics.items() if k in PUBLIC_METRICS},
                 "eval_set": mv.tags.get("eval_set", ""),
-                "weights_uri": uri,
             })
             return mv.version
 
@@ -148,7 +142,6 @@ class DetectionService:
             raise DetectionError(422, "imagen ilegible") from e
         check_format(image.format)
         check_dimensions(*image.size)
-        image_format = image.format
         try:
             image.load()
             # Las cajas se devuelven sobre la imagen como se ve, no como está guardada
@@ -171,23 +164,16 @@ class DetectionService:
             "score_threshold": round(float(threshold), 4),
             "threshold_is_default": score_threshold is None,
             "image_stats": image_stats(image),
-            "image_format": image_format,
         }
 
-    def persist(self, response, image_bytes=None):
-        """predictions/date=…/<request_id>.json y, con probabilidad `persist_images_ratio`,
-        la imagen en raw/stream/date=…/. No debe tumbar la request si falla."""
+    def persist(self, response):
+        """predictions/date=…/<request_id>.json. No debe tumbar la request si falla."""
         try:
             if self._s3 is None:
                 self._s3 = _s3()
             now = datetime.now(timezone.utc)
             day = now.strftime("%Y-%m-%d")
             record = {**response, "created_at": now.isoformat()}
-            if image_bytes is not None and random.random() < self.persist_images_ratio:
-                ext = _EXT.get(response.get("image_format"), "bin")
-                key = f"raw/stream/date={day}/{response['request_id']}.{ext}"
-                self._s3.put_object(Bucket=BUCKET, Key=key, Body=image_bytes)
-                record["image_key"] = key
             self._s3.put_object(
                 Bucket=BUCKET,
                 Key=f"predictions/date={day}/{response['request_id']}.json",

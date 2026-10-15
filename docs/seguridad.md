@@ -8,9 +8,9 @@ prueba contra el stack que lo demuestra.
 
 | Servicio | Dónde escucha | Autenticación |
 |---|---|---|
-| Gateway REST + GraphQL | `${GATEWAY_BIND}:8800` (0.0.0.0 por defecto: es el único servicio pensado para la red) | API key (`X-API-Key`), admin para `/v1/reload` |
+| Gateway REST | `${GATEWAY_BIND}:8800` (0.0.0.0 por defecto: es el único servicio pensado para la red) | API key (`X-API-Key`), admin para `/v1/reload` |
 | Inference (gRPC) | red interna `backend`; `127.0.0.1:50051` para scripts locales | token en metadata (`INFERENCE_TOKEN`) |
-| Airflow, MLflow, MinIO (API y consola), Postgres, Redpanda, Label Studio | solo `127.0.0.1` | usuario y contraseña de `.env` (MLflow: sin usuarios, ver residuales) |
+| Airflow, MLflow, MinIO (API y consola), Postgres, Redpanda | solo `127.0.0.1` | usuario y contraseña de `.env` (MLflow: sin usuarios, ver residuales) |
 
 Todos los secretos están en `.env`, que **no se versiona** y genera `scripts/generar_env.sh`
 con valores aleatorios (permisos 600). `docker-compose.yaml` no tiene contraseñas por defecto:
@@ -24,13 +24,12 @@ si falta una variable, `docker compose` se niega a arrancar.
 | Aplicación | Abuso / denegación de servicio por volumen | Rate limit por clave (ventana deslizante); límite de tamaño por `Content-Length` antes de leer el cuerpo (411/413) | ✅ verificado (429, 411, 413) |
 | Aplicación | Imagen maliciosa: bomba de descompresión, formato inesperado | Formato real JPEG/PNG (no el tipo declarado); dimensiones validadas antes de decodificar; `DecompressionBombError` → 422 | ✅ verificado (GIF disfrazado → 415, PNG 20000² → 422 sin decodificar) |
 | Aplicación | Filtrado de información interna en errores | Errores no previstos → 502/`INTERNAL` con mensaje genérico; el detalle va al log | ✅ verificado |
-| Aplicación | GraphQL: consultas abusivas o descubrimiento del esquema | Sin introspección, límite de profundidad, `limite` ≤ 100, misma API key | ✅ verificado |
 | Infraestructura | Llamadas directas al modelo saltando el gateway | `inference` solo en la red interna; token gRPC (interceptor) | ✅ verificado (`UNAUTHENTICATED`) |
 | Infraestructura | Servicios de administración expuestos (Postgres, MinIO, MLflow, Airflow) | Publicados solo en `127.0.0.1`; MLflow con `--allowed-hosts` (anti DNS rebinding) en lugar de desactivar su middleware; Airflow sin `EXPOSE_CONFIG` | ✅ |
 | Infraestructura | Secretos versionados o por defecto | `.env` fuera de git, generado; sin defaults en compose; Fernet/JWT/secret de Airflow propios de cada instalación | ✅ |
-| Datos | Un servicio comprometido lee o borra todo el lake | Un usuario de MinIO por servicio con mínimo privilegio: `inference` lee `models/`, escribe `predictions/` y `raw/stream/`; `gateway` solo lee `predictions/`; `stream` lee referencias y escribe ventanas y alertas. Nadie más que Airflow puede escribir `models/` | ✅ (`dockerfiles/minio/init.sh`) |
+| Datos | Un servicio comprometido lee o borra todo el lake | Un usuario de MinIO por servicio con mínimo privilegio: `inference` lee `models/` y escribe `predictions/`; `stream` solo escribe ventanas y alertas; el gateway no tiene acceso al lake. Nadie más que Airflow puede escribir `models/` | ✅ (`dockerfiles/minio/init.sh`) |
 | Datos | Datos de entrenamiento o evaluación alterados | Sets revisados versionados en git; en el lake con su sha256 en el nombre y registrado en MLflow | ✅ |
-| Datos | Privacidad: caras y patentes en las imágenes guardadas | Solo se guarda una muestra (`PERSIST_IMAGES_RATIO`, 10 %) y solo para reetiquetar | ⚠️ parcial: sin desenfoque de caras y patentes (trabajo futuro) |
+| Datos | Privacidad: caras y patentes en las imágenes servidas | No se guardan las imágenes de producción: en `predictions/` quedan solo cajas, scores y estadísticas de brillo y contraste | ✅ (los frames siguen pasando por Redpanda: retención del topic a configurar en un despliegue real) |
 | Modelo | Pesos manipulados en el lake (cadena de suministro) | SHA-256 del zip del release obligatorio; SHA-256 del checkpoint registrado en MLflow y **verificado por inference al cargar** (si no coincide, no lo sirve) | ✅ |
 | Modelo | Un modelo peor llega a producción | Gate sobre un set no usado en el entrenamiento ni la calibración, champion re-evaluado con el mismo set, margen mínimo; rollback con `rollback_modelo` | ✅ |
 | Gobernanza | Saber qué modelo, datos y código produjeron cada predicción | Predicción → versión del modelo → `eval_run_id` → set de evaluación (artefacto + sha) + `code_sha256` + `git_commit` | ✅ |
