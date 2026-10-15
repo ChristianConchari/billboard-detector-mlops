@@ -145,7 +145,7 @@ def require_admin(request: Request, _: Optional[str] = Security(api_key_scheme))
     return _authenticate(request, admin=True)
 
 
-app = FastAPI(title="Sistema de detección de vallas publicitarias", version="1")
+app = FastAPI(title="Detector de Vallas Publicitarias", version="1")
 
 
 @app.middleware("http")
