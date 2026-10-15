@@ -5,6 +5,11 @@
 **VallaVision** pone en producción un detector de **vallas publicitarias** en imágenes de cámaras de calle.
 TP integrador de *Operaciones de Aprendizaje Automático II* (CEIA · FIUBA). Autor: Christian Conchari.
 
+**Caso de uso.** El servicio está pensado como el microservicio de detección de **la plataforma**, una plataforma de
+etiquetado geolocalizado de imágenes: vehículos de relevamiento recorren la ciudad con una cámara, cada frame llega
+con su posición GPS, y VallaVision devuelve dónde hay vallas para que la plataforma las etiquete en el mapa. Este
+repositorio implementa y demuestra ese servicio de forma autónoma; la integración con la plataforma queda fuera de su alcance.
+
 El modelo ya está entrenado: es el RT-DETR del proyecto
 [vit-billboard-detector](https://github.com/ChristianConchari/vit-billboard-detector) (release
 [`model-v1`](https://github.com/ChristianConchari/vit-billboard-detector/releases/tag/model-v1),
@@ -136,8 +141,9 @@ build falla con `ReadTimeoutError` de PyPI, construir primero la imagen pesada
 | Redpanda | `localhost:19092`, topic `frames` |
 
 Solo el gateway escucha fuera de la máquina; el resto está en `127.0.0.1`. Uso detallado (REST, gRPC,
-streaming, DAGs, escalado, tests): [docs/uso.md](docs/uso.md). Demo guiada para grabar:
-`scripts/demo.sh` ([guion](docs/demo.md)).
+streaming, DAGs, escalado, tests): [docs/uso.md](docs/uso.md). Demo: el notebook
+[`notebooks/demo_vallavision.ipynb`](notebooks/demo_vallavision.ipynb) (inferencias, gRPC, seguridad, streaming y
+drift con gráficos) más Airflow, MLflow y MinIO en el navegador ([guion](docs/demo.md)).
 
 ## Estructura del repositorio
 
@@ -149,6 +155,7 @@ dockerfiles/           imágenes: gateway, inference, stream (consumidor), airfl
                        minio/init.sh crea un usuario por servicio con mínimo privilegio
 proto/                 contrato gRPC
 annotations/reviewed/  sets con cajas revisadas: gate (test) y referencia de drift (val)
+notebooks/             demo de la presentación (notebook + demo_utils.py)
 scripts/               generar_env, demo, ver_detecciones, camara_productor, benchmark
 tests/                 72 tests sin el stack (corren en el CI)
 docs/                  arquitectura, contrato, seguridad, uso, demo, estado

@@ -1,52 +1,51 @@
 # Guion de la demo grabada
 
-`scripts/demo.sh` corre los segmentos en orden: muestra cada comando, espera **Enter** y recién ahí
-lo ejecuta, así el ritmo lo marca quien graba. Se puede grabar por partes (`scripts/demo.sh 6`) y unir después.
+La demo combina dos cosas, cada una donde se ve mejor:
 
-**Lo que se ve mejor en una interfaz va en el navegador; lo demás, en la terminal.** Los DAGs se
-disparan desde Airflow (segmentos 2 y 6: el script espera la corrida, muestra las tareas y resume en la
-terminal) y la inferencia se prueba en `/docs` del gateway (segmento 3). Para ensayar sin la interfaz:
-`DEMO_CLI=1` dispara los DAGs por comando.
+- **Navegador** para lo que ya tiene interfaz: Airflow (disparar los DAGs y ver el grafo), MLflow (evaluaciones,
+  linaje, alias) y MinIO (el Data Lake, las alertas).
+- **Notebook** (`notebooks/demo_vallavision.ipynb`) para el servicio por dentro: inferencias con las cajas dibujadas,
+  REST vs gRPC, los ataques de seguridad, el streaming de los vehículos y el drift con gráficos. La lógica está en
+  `notebooks/demo_utils.py`, así las celdas son de una o dos líneas.
 
-Los secretos se leen de `.env` y nunca se imprimen: en pantalla aparecen como `$GATEWAY_API_KEYS`. Para
-`/docs`, el script copia la API key al portapapeles; se pega en *Authorize* (el campo la muestra un
-momento: por eso conviene un `.env` propio para la grabación).
+El relato es el del caso de uso: VallaVision como el microservicio de detección de **la plataforma**, una plataforma de
+etiquetado geolocalizado de imágenes (vehículos de relevamiento con cámara; cada frame con su posición GPS, visible
+en las fotos). Sin detalles de la plataforma: solo su papel como consumidora del servicio.
+
+```bash
+python3 -m venv .venv-demo && .venv-demo/bin/pip install -r notebooks/requirements.txt   # una vez
+.venv-demo/bin/jupyter lab notebooks/demo_vallavision.ipynb
+```
+
+El notebook lee los secretos de `.env` y no los imprime. `scripts/demo.sh` sigue disponible como alternativa en la
+terminal (mismos pasos, con pausas).
 
 ## Antes de grabar
 
 - [ ] Stack arriba y con champion (`curl localhost:8800/health` → `model_loaded: true`). No construir en cámara.
 - [ ] `.env` propio para la grabación (`mv .env .env.real && scripts/generar_env.sh` y `down -v` + `up` + `registrar_modelo`), o al menos no abrirlo nunca en pantalla.
-- [ ] Cerrar navegador pesado y otros proyectos: OBS más el modelo compiten por la CPU y la latencia sube.
-- [ ] Terminal con fuente grande (≥ 16 pt), prompt corto, 120 columnas. Para la terminal, `asciinema rec` da un video limpio; OBS para el navegador.
-- [ ] Pestañas abiertas: Airflow (grafo de `registrar_modelo`), MLflow (experimento `evaluaciones`), MinIO (bucket `data`).
-- [ ] Ensayo sin pausas: `DEMO_SIN_PAUSAS=1 DEMO_NO_ABRIR=1 scripts/demo.sh` (≈ 9 min, deja el sistema como estaba).
+- [ ] Sin benchmarks en la hora previa: contaminan el drift que ve `monitoreo_drift`.
+- [ ] Cerrar navegador pesado y otros proyectos: el grabador y el modelo compiten por la CPU y la latencia sube.
+- [ ] JupyterLab con zoom ≥ 125 % y el notebook sin salidas (Kernel → Restart Kernel and Clear Outputs).
+- [ ] Pestañas abiertas y con la sesión iniciada: Airflow, MLflow, MinIO.
+- [ ] Ensayo: correr el notebook entero una vez (≈ 4 min); deja el sistema como estaba.
 
-## Pantalla
+## Orden de la grabación
 
-Terminal a la izquierda (fuente ≥ 16 pt) y navegador a la derecha, con estas pestañas abiertas y la
-sesión ya iniciada: Airflow (`http://localhost:8080`), MLflow (`http://localhost:5001`), MinIO
-(`http://localhost:9001`) y `http://localhost:8800/docs`.
+| # | Dónde | Qué se ve | Qué decir |
+|---|---|---|---|
+| 1 | Notebook, intro + celda 1 | el caso de uso (tabla de piezas y su papel en la plataforma) y el modelo servido: versión, mAP del gate con IC | "VallaVision es el servicio de detección de una plataforma de etiquetado geolocalizado. Esto es lo que está sirviendo." |
+| 2 | **Airflow → MLflow** | disparar `registrar_modelo` (Trigger, vista Graph; cortar la espera) → log de `promover` → en MLflow el run de `evaluaciones` (métricas, `git_commit`, artefacto `eval_set`) y el modelo con alias `champion` | "Ningún modelo nuevo cambia las etiquetas de la plataforma sin pasar un gate sobre datos que no vio, con linaje completo." |
+| 3 | Notebook §1 | la foto con las 5 vallas y su tabla; el mosaico de 4 recorridos con la posición GPS sobreimpresa | "La plataforma manda un frame; el servicio devuelve las cajas y la versión del modelo que las produjo." |
+| 4 | Notebook §2 | REST vs gRPC: bytes y latencia; base64 +33 % | "Adentro, gRPC: bytes tal cual, contrato tipado. La plataforma solo ve el gateway." |
+| 5 | Notebook §3 | la tabla de ataques, todo ✔ | "Los controles de seguridad, contra el sistema real." |
+| 6 | Notebook §4–5 | los vehículos publican en Redpanda; ventanas por recorrido; particiones del topic; después de noche | "El broker absorbe la diferencia entre lo que producen los vehículos y lo que infiere el modelo; las ventanas son por instante de captura." |
+| 7 | Notebook §6 → **Airflow → MinIO** | el gráfico del brillo con el tráfico recién enviado: normal sin drift, de noche con drift. Después disparar `monitoreo_drift` (la tarea `alertar` en rojo) y abrir la alerta en `monitoring/alerts/` | "Sin etiquetas se vigilan las condiciones de captura; el DAG lo hace cada hora y alerta a una persona." |
 
-## Segmentos
-
-| # | Dónde | Qué se hace y qué se ve | Duración | Qué decir |
-|---|---|---|---|---|
-| 1 | terminal | `docker compose ps`: los servicios healthy y sus puertos | 30 s | "Todo el sistema es un `docker compose up`. Solo el gateway escucha fuera de la máquina." |
-| 2 | **Airflow** → **MLflow** | En Airflow: Dags → `registrar_modelo` → Trigger → vista Graph; las 7 tareas se ponen verdes (cortar la espera); log de `promover`. La terminal resume alias, mAP 0.647 con IC, motivo, sha y commit. En MLflow: experimento `evaluaciones` → último run → artefacto `eval_set/…` y tag `git_commit`; Models → `billboard-detector` con el alias `champion` | 1,5 min | "Ningún modelo llega a producción sin pasar un gate sobre datos que no vio, comparado con el champion sobre el mismo set, y con linaje completo." |
-| 3 | **`/docs`** → foto | En `/docs`: Authorize (pegar la clave) → `POST /v1/detect` → Try it out → imagen → Execute: el JSON con las cajas y la versión. Después la terminal abre la foto con las 5 vallas encuadradas | 1 min | "El gateway no tiene el modelo: autentica, valida y reenvía por gRPC. La respuesta trae la versión que la produjo." |
-| 4 | terminal | 401 sin clave, 403 con clave inválida, 415 a un GIF disfrazado, 403 al recargar sin clave admin, `UNAUTHENTICATED` por gRPC | 45 s | "Los controles de la Sesión 7, cada uno con su test." |
-| 5 | terminal | Ventanas por cámara (frames, p95, vallas por frame), primero normal y después de noche; al final las particiones del topic y el retraso (*lag*) del grupo de consumidores | 2 min | "Redpanda absorbe la diferencia entre lo que producen las cámaras y lo que infiere el modelo. La cámara es la clave: sus frames quedan en orden. Las ventanas son por el instante de captura." |
-| 6 | **Airflow** → terminal → **MinIO** | En Airflow: disparar `monitoreo_drift`; `alertar` queda en rojo a propósito. La terminal muestra los p-valores: drift en brillo y contraste, no en conteo ni score. En MinIO: `monitoring/alerts/` | 1 min | "El drift se calcula en un solo lugar, sobre todo el tráfico, y alerta a una persona. Detecta cambios; no mide calidad." |
-| 7 | terminal | (opcional) Pesos alterados en MinIO → inference se niega a servirlos → restaurados | 45 s | "El hash registrado en MLflow manda." |
-
-Versión corta para 15 minutos de presentación (≈ 4 min): segmentos **2, 3, 5 y 6**
-(`scripts/demo.sh 2 3 5 6`). El 6 analiza el tráfico del 5: grabarlos en ese orden y seguidos.
-
-El escalado, la latencia y REST vs gRPC van mejor en una diapositiva con las tablas de
-[arquitectura.md](arquitectura.md) que en vivo, igual que "Qué se dejó afuera y por qué".
+Duración: ~6 min (las esperas del DAG y de los recorridos se cortan al editar). El §4–§6 del notebook tienen que
+correr seguidos: el drift usa el tráfico de esos dos recorridos.
 
 ## Si algo sale mal
 
-- Segmento 7 interrumpido con Ctrl+C: restaura los pesos solo; si no, `scripts/demo.sh 7` de nuevo los deja bien.
-- Segmento 5 sin ventanas: `docker logs billboard-detector-mlops-stream-consumer-1` (el consumidor tiene que estar corriendo).
-- Las demos escriben en `predictions/`: el `monitoreo_drift` de la hora siguiente va a ver ese tráfico (y el oscurecido da drift). Para que el segmento 6 muestre drift, correr antes el 5.
+- Sin ventanas en el §4: `docker logs billboard-detector-mlops-stream-consumer-1` (el consumidor tiene que estar corriendo).
+- La demo escribe en `predictions/`: el `monitoreo_drift` de la hora siguiente ve ese tráfico (el de noche da drift). Para que el DAG muestre drift, disparalo después del §5 del notebook.
