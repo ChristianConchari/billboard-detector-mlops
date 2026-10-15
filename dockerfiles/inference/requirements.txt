@@ -1,13 +1,13 @@
 grpcio==1.84.0
-# 1.81.x es la última que genera código para protobuf 6 (mlflow-skinny exige protobuf < 7)
+# 1.81.x is the last release generating code for protobuf 6 (mlflow-skinny requires protobuf < 7)
 grpcio-tools==1.81.1
 protobuf==6.33.6
 mlflow-skinny==3.16.1
 boto3==1.43.114
 pillow==12.3.0
 
-# Mismas versiones que la imagen de Airflow: el detector se evalúa y se sirve igual.
-# torch sin CUDA para no sumar varios GB a la imagen
+# Same versions as the Airflow image: the detector is evaluated and served the same way.
+# torch without CUDA, to avoid adding several GB to the image
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.14.0+cpu
 torchvision==0.29.0+cpu

@@ -1,7 +1,7 @@
-"""Decisión de promoción y métricas del gate (docs/arquitectura.md, "Gate de promoción").
+"""Promotion decision and gate metrics (see the promotion gate in docs/arquitectura.md).
 
-Funciones puras (sin MLflow ni torch) para poder testearlas: el DAG `registrar_modelo`
-las usa con métricas medidas sobre el mismo set para candidato y champion.
+Pure functions (no MLflow, no torch) so they can be tested: the `register_model` DAG uses
+them with metrics measured on the same set for both the candidate and the champion.
 """
 
 import contextlib
@@ -10,26 +10,26 @@ import random
 
 
 def decide(candidate, champion, min_map, min_improvement):
-    """→ (alias, motivo).
+    """→ (alias, reason).
 
-    `candidate` y `champion` son {"map": float} medidos sobre el MISMO set de evaluación;
-    `champion` es None si no hay. El candidato pasa a champion si supera `min_map` y le
-    gana al champion actual por al menos `min_improvement` (un empate o una mejora menor
-    que el ruido del set no justifica cambiar el modelo en producción).
+    `candidate` and `champion` are {"map": float} measured on the SAME evaluation set;
+    `champion` is None when there is none. The candidate becomes champion if it reaches
+    `min_map` and beats the current champion by at least `min_improvement` (a tie, or an
+    improvement smaller than the set's noise, does not justify replacing the model in production).
     """
     if candidate["map"] < min_map:
         return "challenger", f"mAP {candidate['map']:.4f} < min_map {min_map}"
     if champion is None:
-        return "champion", f"sin champion previo y mAP {candidate['map']:.4f} ≥ min_map {min_map}"
+        return "champion", f"no previous champion and mAP {candidate['map']:.4f} ≥ min_map {min_map}"
     delta = candidate["map"] - champion["map"]
     if delta < min_improvement:
         return "challenger", (f"mAP {candidate['map']:.4f} vs champion {champion['map']:.4f} "
                               f"(Δ {delta:+.4f} < {min_improvement})")
-    return "champion", f"mejora Δ {delta:+.4f} ≥ {min_improvement} sobre el champion"
+    return "champion", f"improves on the champion by Δ {delta:+.4f} ≥ {min_improvement}"
 
 
 def coco_map(gt_dataset, results):
-    """(mAP@[.5:.95], AP50) de COCOeval, silencioso; 0 si no hay detecciones o GT evaluable."""
+    """(mAP@[.5:.95], AP50) from COCOeval, silently; 0 when there are no detections or no usable GT."""
     from pycocotools.coco import COCO
     from pycocotools.cocoeval import COCOeval
 
@@ -43,16 +43,16 @@ def coco_map(gt_dataset, results):
         ev.evaluate()
         ev.accumulate()
         ev.summarize()
-    # COCOeval devuelve -1 si no hay GT evaluable
+    # COCOeval returns -1 when there is no usable ground truth
     return max(float(ev.stats[0]), 0.0), max(float(ev.stats[1]), 0.0)
 
 
 def bootstrap_map(gt_dataset, results, n=200, seed=0, level=0.95):
-    """IC por bootstrap de imágenes para el mAP: (bajo, alto).
+    """Confidence interval for the mAP by bootstrapping images: (low, high).
 
-    Remuestrea imágenes con reposición; las repetidas se renumeran porque COCOeval no
-    admite ids duplicados. Con ~95 imágenes de pocos videos el IC es ancho: es la
-    incertidumbre real del gate.
+    Images are resampled with replacement; repeated images are renumbered because COCOeval
+    does not accept duplicate ids. With ~95 images from a few videos the interval is wide:
+    that is the real uncertainty of the gate.
     """
     rng = random.Random(seed)
     images = gt_dataset["images"]
@@ -81,11 +81,11 @@ def bootstrap_map(gt_dataset, results, n=200, seed=0, level=0.95):
 
 
 def index_by_name(keys):
-    """{file_name: key} de claves de S3; falla si dos splits tienen el mismo nombre de archivo."""
+    """{file_name: key} from S3 keys; fails if two splits contain the same file name."""
     out = {}
     for key in keys:
         name = key.rsplit("/", 1)[1]
         if name in out and out[name] != key:
-            raise ValueError(f"nombre de imagen repetido en el lake: {out[name]} y {key}")
+            raise ValueError(f"duplicate image name in the data lake: {out[name]} and {key}")
         out[name] = key
     return out

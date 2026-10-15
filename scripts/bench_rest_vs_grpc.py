@@ -1,12 +1,12 @@
-"""Compara latencia, throughput y tamaño de mensaje: REST (multipart / base64) vs gRPC (bytes).
+"""Compares latency, throughput and message size: REST (multipart / base64) vs gRPC (bytes).
 
-Requiere el stack arriba y un champion registrado. Genera el código gRPC antes:
+Requires the stack up and a registered champion. Generate the gRPC code first:
     scripts/gen_proto.sh
-    uv run --with requests --with grpcio --with grpcio-tools scripts/bench_rest_vs_grpc.py IMG -n 20 -c 1 2 4
+    python scripts/bench_rest_vs_grpc.py IMG -n 20 -c 1 2 4
 
-`-c` acepta varias concurrencias: con cada una se lanzan `-n` requests desde N hilos y se mide
-el throughput (req/s) además de p50/p95. REST apunta al gateway y gRPC directo a inference.
-La API key del gateway y el token de inference se leen de `.env`.
+`-c` accepts several concurrency levels: for each one, `-n` requests are sent from N threads
+and throughput (req/s) is measured along with p50/p95. REST hits the gateway and gRPC goes
+straight to inference. The gateway API key and the inference token are read from `.env`.
 """
 
 import argparse
@@ -23,8 +23,8 @@ import grpc
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from vallavision.grpc_gen import detector_pb2 as pb  # noqa: E402
-from vallavision.grpc_gen import detector_pb2_grpc as pb_grpc  # noqa: E402
+from billboard_detector.grpc_gen import detector_pb2 as pb  # noqa: E402
+from billboard_detector.grpc_gen import detector_pb2_grpc as pb_grpc  # noqa: E402
 
 
 def env(name):
@@ -44,7 +44,7 @@ def percentile(ms, q):
 
 
 def run(fn, n, concurrency):
-    """n llamadas desde `concurrency` hilos → (throughput req/s, p50 ms, p95 ms)."""
+    """n calls from `concurrency` threads → (throughput req/s, p50 ms, p95 ms)."""
     def timed(_):
         t0 = time.perf_counter()
         fn()
@@ -60,7 +60,7 @@ def run(fn, n, concurrency):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("image")
-    ap.add_argument("-n", type=int, default=20, help="requests por protocolo y concurrencia")
+    ap.add_argument("-n", type=int, default=20, help="requests per protocol and concurrency level")
     ap.add_argument("-c", "--concurrency", type=int, nargs="+", default=[1])
     ap.add_argument("--rest", default="http://localhost:8800")
     ap.add_argument("--grpc", default="localhost:50051")
@@ -84,8 +84,8 @@ def main():
     def grpc_call():
         stub.Detect(req, metadata=metadata)
 
-    rest(), grpc_call()  # calentamiento
-    print(f"{'protocolo':10}{'c':>3}{'req/s':>9}{'p50 ms':>10}{'p95 ms':>10}")
+    rest(), grpc_call()  # warm-up
+    print(f"{'protocol':10}{'c':>3}{'req/s':>9}{'p50 ms':>10}{'p95 ms':>10}")
     for c in args.concurrency:
         for name, fn in (("REST", rest), ("gRPC", grpc_call)):
             rps, p50, p95 = run(fn, args.n, c)
@@ -96,7 +96,7 @@ def main():
         "REST JSON + base64": len(('{"image":"%s"}' % base64.b64encode(data).decode()).encode()),
         "gRPC bytes": req.ByteSize(),
     }
-    print("\nTamaño del request:")
+    print("\nRequest size:")
     for name, size in sizes.items():
         print(f"  {name:20}{size:>10,} B")
 

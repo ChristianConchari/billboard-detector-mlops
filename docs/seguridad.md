@@ -12,7 +12,7 @@ prueba contra el stack que lo demuestra.
 | Inference (gRPC) | red interna `backend`; `127.0.0.1:50051` para scripts locales | token en metadata (`INFERENCE_TOKEN`) |
 | Airflow, MLflow, MinIO (API y consola), Postgres, Redpanda | solo `127.0.0.1` | usuario y contraseña de `.env` (MLflow: sin usuarios, ver residuales) |
 
-Todos los secretos están en `.env`, que **no se versiona** y genera `scripts/generar_env.sh`
+Todos los secretos están en `.env`, que **no se versiona** y genera `scripts/generate_env.sh`
 con valores aleatorios (permisos 600). `docker-compose.yaml` no tiene contraseñas por defecto:
 si falta una variable, `docker compose` se niega a arrancar.
 
@@ -31,15 +31,15 @@ si falta una variable, `docker compose` se niega a arrancar.
 | Datos | Datos de entrenamiento o evaluación alterados | Sets revisados versionados en git; en el lake con su sha256 en el nombre y registrado en MLflow | ✅ |
 | Datos | Privacidad: caras y patentes en las imágenes servidas | No se guardan las imágenes de producción: en `predictions/` quedan solo cajas, scores y estadísticas de brillo y contraste | ✅ (los frames siguen pasando por Redpanda: retención del topic a configurar en un despliegue real) |
 | Modelo | Pesos manipulados en el lake (cadena de suministro) | SHA-256 del zip del release obligatorio; SHA-256 del checkpoint registrado en MLflow y **verificado por inference al cargar** (si no coincide, no lo sirve) | ✅ |
-| Modelo | Un modelo peor llega a producción | Gate sobre un set no usado en el entrenamiento ni la calibración, champion re-evaluado con el mismo set, margen mínimo; rollback con `rollback_modelo` | ✅ |
+| Modelo | Un modelo peor llega a producción | Gate sobre un set no usado en el entrenamiento ni la calibración, champion re-evaluado con el mismo set, margen mínimo; rollback con `rollback_model` | ✅ |
 | Gobernanza | Saber qué modelo, datos y código produjeron cada predicción | Predicción → versión del modelo → `eval_run_id` → set de evaluación (artefacto + sha) + `code_sha256` + `git_commit` | ✅ |
-| Gobernanza | Degradación silenciosa en producción | `monitoreo_drift` horario + ventanas del consumidor; alertas en `monitoring/alerts/` | ✅ |
+| Gobernanza | Degradación silenciosa en producción | `drift_monitoring` horario + ventanas del consumidor; alertas en `monitoring/alerts/` | ✅ |
 
 ## Riesgos residuales (conocidos y aceptados para este alcance)
 
 - **MLflow sin usuarios.** Cualquier proceso en la red interna o en la máquina puede mover el alias
   `champion`. Mitigado: no se expone fuera de `127.0.0.1`, inference solo sirve pesos cuyo hash
-  coincide con el registrado, y el alias anterior queda en `anterior`. Para producción: MLflow con
+  coincide con el registrado, y el alias anterior queda en `previous`. Para producción: MLflow con
   `--app-name basic-auth` o detrás de un proxy con autenticación.
 - **Sin TLS.** El tráfico interno (gRPC, S3, MLflow) va en claro dentro de la red de Docker y el
   gateway sirve HTTP. En un despliegue real: TLS en el borde (proxy) y mTLS entre servicios.

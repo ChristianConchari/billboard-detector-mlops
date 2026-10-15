@@ -18,7 +18,6 @@ set -a; . ./.env; set +a
 
 ```bash
 curl -H "X-API-Key: $GATEWAY_API_KEYS" -F image=@<imagen>.jpg localhost:8800/v1/detect
-python scripts/ver_detecciones.py <imagen>.jpg     # la misma llamada, con las cajas dibujadas (requiere Pillow)
 ```
 
 Cada predicción queda en `s3://data/predictions/date=…/` con cajas, scores, umbral usado y estadísticas
@@ -30,7 +29,7 @@ de brillo y contraste. Las imágenes no se guardan. Contrato completo: [contrato
 `127.0.0.1:50051` y exige el token de `.env`. El benchmark lee la clave y el token solos:
 
 ```bash
-scripts/gen_proto.sh   # genera vallavision/grpc_gen/ (grpcio-tools==1.81.1)
+scripts/gen_proto.sh   # genera billboard_detector/grpc_gen/ (grpcio-tools==1.81.1)
 python scripts/bench_rest_vs_grpc.py <imagen>.jpg -n 40 -c 1 2 4
 ```
 
@@ -41,25 +40,25 @@ instante de captura en el encabezado `event_time_ms`. El servicio `stream-consum
 métricas por ventana de 15 s (por cámara) en `curated/stream_windows/`, con alerta si el p95 supera 2 s.
 
 ```bash
-python scripts/camara_productor.py --rate 2                       # cámaras del test revisado
-python scripts/camara_productor.py --rate 2 --degrade oscurecer   # de noche: lo detecta monitoreo_drift
-python scripts/camara_productor.py --late 0.2                     # 20 % de frames desordenados (watermark)
+python scripts/camera_producer.py --rate 2                       # cámaras del test revisado
+python scripts/camera_producer.py --rate 2 --degrade darken   # de noche: lo detecta drift_monitoring
+python scripts/camera_producer.py --late 0.2                     # 20 % de frames desordenados (watermark)
 docker logs -f billboard-detector-mlops-stream-consumer-1
 ```
 
-(Requiere `kafka-python` y `pillow`; `scripts/demo.sh` arma un entorno con todo lo necesario en `.venv-demo/`.)
+(Requiere `kafka-python` y `pillow`: `notebooks/requirements.txt` arma el entorno con todo lo necesario.)
 
 ## DAGs de Airflow
 
 | DAG | Cuándo | Qué hace |
 |---|---|---|
-| `registrar_modelo` | al publicar pesos nuevos | descarga y verifica, mide el gate, registra con linaje, re-evalúa al champion, decide el alias. Parámetros: `weights_source` (`gh://`, `hf://repo@revisión`, `s3://data/…`), `min_map`, `min_improvement`, `n_bootstrap` |
-| `rollback_modelo` | si el champion nuevo se porta mal | intercambia `champion` y `anterior` |
-| `monitoreo_drift` | cada hora | drift de las predicciones del intervalo contra la referencia; con drift, alerta y la corrida falla |
+| `register_model` | al publicar pesos nuevos | descarga y verifica, mide el gate, registra con linaje, re-evalúa al champion, decide el alias. Parámetros: `weights_source` (`gh://`, `hf://repo@revisión`, `s3://data/…`), `min_map`, `min_improvement`, `n_bootstrap` |
+| `rollback_model` | si el champion nuevo se porta mal | intercambia `champion` y `previous` |
+| `drift_monitoring` | cada hora | drift de las predicciones del intervalo contra la referencia; con drift, alerta y la corrida falla |
 
 ```bash
-docker exec airflow-apiserver airflow dags trigger registrar_modelo --conf '{"min_improvement": 0.02}'
-docker exec airflow-apiserver airflow dags trigger monitoreo_drift --conf '{"window_hours": 2}'
+docker exec airflow-apiserver airflow dags trigger register_model --conf '{"min_improvement": 0.02}'
+docker exec airflow-apiserver airflow dags trigger drift_monitoring --conf '{"window_hours": 2}'
 ```
 
 ## Escalar la inferencia

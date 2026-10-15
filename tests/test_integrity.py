@@ -1,7 +1,9 @@
-from vallavision.integrity import git_commit, sha256_dir
+"""Checkpoint hashing and reading the git commit without the git binary."""
+
+from billboard_detector.integrity import git_commit, sha256_dir
 
 
-def test_sha256_dir_ignora_metadata_y_detecta_cambios(tmp_path):
+def test_sha256_dir_ignores_metadata_and_detects_changes(tmp_path):
     (tmp_path / "sub").mkdir()
     (tmp_path / "a.bin").write_bytes(b"1")
     (tmp_path / "sub" / "b.bin").write_bytes(b"2")
@@ -20,4 +22,4 @@ def test_git_commit(tmp_path):
     assert git_commit(tmp_path) == "abc123"
     (tmp_path / "refs" / "heads" / "main").write_text("def456\n")
     assert git_commit(tmp_path) == "def456"
-    assert git_commit(tmp_path / "no-existe") is None
+    assert git_commit(tmp_path / "missing") is None

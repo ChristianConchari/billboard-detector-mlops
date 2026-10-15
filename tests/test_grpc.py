@@ -1,14 +1,15 @@
-"""Servidor gRPC real (puerto efímero) con un servicio falso."""
+"""Real gRPC server (ephemeral port) with a fake service."""
 
 import io
+
 import grpc
 import pytest
 from PIL import Image
 
-from vallavision.grpc_gen import detector_pb2 as pb
-from vallavision.grpc_gen import detector_pb2_grpc as pb_grpc
-from vallavision.grpc_server import build_server
-from vallavision.service import DetectionService
+from billboard_detector.grpc_gen import detector_pb2 as pb
+from billboard_detector.grpc_gen import detector_pb2_grpc as pb_grpc
+from billboard_detector.grpc_server import build_server
+from billboard_detector.service import DetectionService
 from tests.test_service import FakeDetector
 
 
@@ -42,25 +43,25 @@ def test_detect(stub):
     assert r.model.alias == "champion"
 
 
-def test_detect_con_umbral(stub):
+def test_detect_with_threshold(stub):
     s, _ = stub
     assert len(s.Detect(pb.DetectRequest(image=png(), score_threshold=0.5)).detections) == 1
 
 
-def test_frame_id_vuelve_en_la_respuesta(stub):
+def test_frame_id_is_echoed(stub):
     s, _ = stub
     assert s.Detect(pb.DetectRequest(image=png(), frame_id="cam1-7")).frame_id == "cam1-7"
 
 
-def test_bmp_por_grpc_415_invalid_argument(stub):
+def test_bmp_over_grpc_is_415_invalid_argument(stub):
     s, _ = stub
     with pytest.raises(grpc.RpcError) as e:
         s.Detect(pb.DetectRequest(image=png(fmt="BMP")))
-    assert e.value.code() == grpc.StatusCode.INVALID_ARGUMENT and "formato" in e.value.details()
+    assert e.value.code() == grpc.StatusCode.INVALID_ARGUMENT and "format" in e.value.details()
     assert dict(e.value.trailing_metadata())["http-status"] == "415"
 
 
-def test_deadline_vencido_no_persiste(stub):
+def test_expired_deadline_is_not_persisted(stub):
     import threading
     import time
 
@@ -68,11 +69,11 @@ def test_deadline_vencido_no_persiste(stub):
     gate = threading.Event()
     real = service.detect
 
-    def lento(*a, **kw):
+    def slow(*a, **kw):
         gate.wait(2)
         return real(*a, **kw)
 
-    service.detect = lento
+    service.detect = slow
     with pytest.raises(grpc.RpcError) as e:
         s.Detect(pb.DetectRequest(image=png()), timeout=0.2)
     assert e.value.code() == grpc.StatusCode.DEADLINE_EXCEEDED
@@ -81,20 +82,18 @@ def test_deadline_vencido_no_persiste(stub):
     assert service.persisted == []
 
 
-def test_error_interno_no_filtra_detalles(stub):
+def test_internal_error_does_not_leak_details(stub):
     s, service = stub
-    service.detect = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("secreto: /ruta/interna"))
+    service.detect = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("secret: /internal/path"))
     with pytest.raises(grpc.RpcError) as e:
         s.Detect(pb.DetectRequest(image=png()))
-    assert e.value.code() == grpc.StatusCode.INTERNAL and "secreto" not in e.value.details()
+    assert e.value.code() == grpc.StatusCode.INTERNAL and "secret" not in e.value.details()
 
 
-def test_token_obligatorio():
-    from tests.test_service import FakeDetector as Fake
-
+def test_token_is_required():
     service = DetectionService()
-    service.set_model(Fake(), {"name": "m", "version": "1", "alias": "champion", "labels": [],
-                               "score_threshold": 0.1, "metrics": {}})
+    service.set_model(FakeDetector(), {"name": "m", "version": "1", "alias": "champion", "labels": [],
+                                       "score_threshold": 0.1, "metrics": {}})
     service.persist = lambda r: None
     server = build_server(service, token="s3cr3t", max_workers=2)
     port = server.add_insecure_port("localhost:0")
@@ -102,7 +101,7 @@ def test_token_obligatorio():
     try:
         with grpc.insecure_channel(f"localhost:{port}") as ch:
             st = pb_grpc.DetectorStub(ch)
-            for md in (None, [("authorization", "Bearer otro")]):
+            for md in (None, [("authorization", "Bearer other")]):
                 with pytest.raises(grpc.RpcError) as e:
                     st.GetModel(pb.GetModelRequest(), metadata=md)
                 assert e.value.code() == grpc.StatusCode.UNAUTHENTICATED
@@ -116,18 +115,18 @@ def test_token_obligatorio():
 
 
 @pytest.mark.parametrize("request_,code", [
-    (pb.DetectRequest(image=b"no soy una imagen"), grpc.StatusCode.INVALID_ARGUMENT),
+    (pb.DetectRequest(image=b"not an image"), grpc.StatusCode.INVALID_ARGUMENT),
     (pb.DetectRequest(image=b"0" * (5 * 1024 * 1024 + 2)), grpc.StatusCode.RESOURCE_EXHAUSTED),
     (pb.DetectRequest(image=b"", score_threshold=3.0), grpc.StatusCode.INVALID_ARGUMENT),
 ])
-def test_errores(stub, request_, code):
+def test_errors(stub, request_, code):
     s, _ = stub
     with pytest.raises(grpc.RpcError) as e:
         s.Detect(request_)
     assert e.value.code() == code
 
 
-def test_sin_modelo_unavailable(stub):
+def test_no_model_is_unavailable(stub):
     s, service = stub
     service._model = None
     with pytest.raises(grpc.RpcError) as e:
@@ -144,9 +143,9 @@ def test_get_model(stub):
     assert m.eval_set == "reviewed/test.json@abc"
 
 
-def test_reload_sin_mlflow_unavailable(stub):
+def test_reload_without_mlflow_is_unavailable(stub):
     s, service = stub
-    service.load_champion = lambda: (_ for _ in ()).throw(RuntimeError("mlflow caído"))
+    service.load_champion = lambda: (_ for _ in ()).throw(RuntimeError("mlflow is down"))
     with pytest.raises(grpc.RpcError) as e:
         s.Reload(pb.ReloadRequest())
     assert e.value.code() == grpc.StatusCode.UNAVAILABLE

@@ -1,4 +1,4 @@
-# Tests sin el stack (pytest tests). También fija las versiones compartidas con la demo (notebooks/requirements.txt lo usa como restricciones)
+# Tests without the stack (pytest tests). Also pins the versions shared with the demo (notebooks/requirements.txt uses this file as constraints)
 pytest==9.1.1
 fastapi==0.143.1
 starlette==1.8.0

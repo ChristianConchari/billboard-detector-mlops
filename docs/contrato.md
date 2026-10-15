@@ -11,9 +11,9 @@ cambiar sin romper a ningún consumidor. Controles de seguridad: [seguridad.md](
 | Nombre en MLflow Registry | `billboard-detector` |
 | Modelo (v1) | RT-DETR ResNet-50 fine-tuned, release [`model-v1`](https://github.com/ChristianConchari/vit-billboard-detector/releases/tag/model-v1) (PyTorch, clase única) |
 | Métricas del release | test: mAP 0.649 · AP50 0.930 · AP75 0.794 · 19.5 ms (GPU) |
-| Métricas del gate | `gate_map`, `gate_map_50` e IC 95 % por bootstrap, medidas por `registrar_modelo` sobre el `test` revisado (ver §5) |
+| Métricas del gate | `gate_map`, `gate_map_50` e IC 95 % por bootstrap, medidas por `register_model` sobre el `test` revisado (ver §5) |
 | Umbral | 0.15, calibrado sobre el `val` revisado (`calibration.json` viaja con los pesos) |
-| Aliases | `champion` (modelo servido), `challenger` (candidato que no pasó el gate), `anterior` (champion saliente, para rollback) |
+| Aliases | `champion` (modelo servido), `challenger` (candidato que no pasó el gate), `previous` (champion saliente, para rollback) |
 
 > MLflow 3 depreca las *stages* (`Staging`/`Production`); se usan **aliases**.
 > `champion` cumple el rol de "Production".
@@ -121,9 +121,9 @@ s3://data/
   predictions/date=YYYY-MM-DD/<request_id>.json   cada inferencia: §2 + campos de monitoreo (abajo)
   curated/eval/<dataset>/<nombre>-<sha12>.json    sets revisados de gate y referencia (inmutables, sha en el nombre)
   curated/reference/billboard-detector/v<N>.json  features del `val` revisado por versión (referencia de drift)
-  curated/predictions/model=v<M>/date=…/<intervalo>.parquet   features por frame compactadas por monitoreo_drift
+  curated/predictions/model=v<M>/date=…/<intervalo>.parquet   features por frame compactadas por drift_monitoring
   curated/stream_windows/date=…/<cámara>-<inicio>.json        métricas por ventana del consumidor de streaming
-  monitoring/drift/<timestamp>.json               reportes de monitoreo_drift
+  monitoring/drift/<timestamp>.json               reportes de drift_monitoring
   monitoring/alerts/<timestamp>-<tipo>.json       alertas: drift, error técnico, stream (SLO de latencia)
 ```
 
@@ -137,9 +137,9 @@ Bucket `mlflow`: artefactos de MLflow (lo gestiona MLflow, no se escribe a mano)
 
 | DAG | Qué hace |
 |---|---|
-| `registrar_modelo` | descarga pesos (SHA-256 del zip obligatorio) → `models/…/v<N>/` → evalúa sobre el `test` revisado: mAP, AP50 e IC 95 % → run en el experimento `evaluaciones` con el set como artefacto, su sha256, el hash del código y el commit → registra en MLflow → re-evalúa el champion sobre el mismo set → `champion` si mAP ≥ `min_map` (0.5) y supera al champion por `min_improvement` (0.01); si no, `challenger`. El saliente queda como `anterior` |
-| `rollback_modelo` | intercambia `champion` y `anterior` |
-| `monitoreo_drift` | horario, sobre `data_interval`: compacta las predicciones del champion **con umbral calibrado** a Parquet → chi² (`n_detections`) y KS (`score_mean`, `brightness`, `contrast`) con corrección de Holm (α=0.01 por ventana) → reporte; con drift: alerta `drift` y la corrida falla con `DriftDetected`. Un error técnico deja una alerta `error`. Con menos de 20 frames no emite veredicto |
+| `register_model` | descarga pesos (SHA-256 del zip obligatorio) → `models/…/v<N>/` → evalúa sobre el `test` revisado: mAP, AP50 e IC 95 % → run en el experimento `evaluations` con el set como artefacto, su sha256, el hash del código y el commit → registra en MLflow → re-evalúa el champion sobre el mismo set → `champion` si mAP ≥ `min_map` (0.5) y supera al champion por `min_improvement` (0.01); si no, `challenger`. El saliente queda como `previous` |
+| `rollback_model` | intercambia `champion` y `previous` |
+| `drift_monitoring` | horario, sobre `data_interval`: compacta las predicciones del champion **con umbral calibrado** a Parquet → chi² (`n_detections`) y KS (`score_mean`, `brightness`, `contrast`) con corrección de Holm (α=0.01 por ventana) → reporte; con drift: alerta `drift` y la corrida falla con `DriftDetected`. Un error técnico deja una alerta `error`. Con menos de 20 frames no emite veredicto |
 
 ## 6. Streaming con broker (Sesión 4)
 
@@ -149,5 +149,5 @@ captura) y `frame_id`. El consumidor (`stream-consumer`, grupo `detector`) infie
 agrupa por cámara en ventanas tumbling de 15 s por event time con watermark (tolerancia 2 s; lo que
 llega después se cuenta como tardío; una cámara sin frames por 10 s cierra sus ventanas) y deja en
 `curated/stream_windows/` frames, throughput, latencia p50/p95, detecciones por frame y frames
-tardíos. Alerta si p95 > 2 s. El drift no se calcula acá sino en `monitoreo_drift`, que ve todo el
+tardíos. Alerta si p95 > 2 s. El drift no se calcula acá sino en `drift_monitoring`, que ve todo el
 tráfico. Semántica at-least-once (commit después de inferir).

@@ -1,18 +1,18 @@
-"""Integridad de artefactos: hash de un checkpoint (directorio) y del código.
+"""Artifact integrity: hashing a checkpoint directory and reading the code version.
 
-Sin dependencias: lo usan el DAG (al registrar), el servicio (al cargar el champion,
-para no servir pesos alterados en MinIO).
+No dependencies: used by the DAG (when registering) and by the service (when loading the
+champion, so that weights tampered with in MinIO are never served).
 """
 
 import hashlib
 import os
 
-# metadata.json y .lock los escribe el DAG en el prefijo de la versión: no son parte del checkpoint
+# The DAG writes metadata.json and .lock under the version prefix: they are not part of the checkpoint
 EXCLUDE = ("metadata.json", ".lock")
 
 
 def sha256_dir(path, exclude=EXCLUDE):
-    """SHA-256 de los nombres y contenidos de todos los archivos bajo `path`, en orden."""
+    """SHA-256 of the names and contents of every file under `path`, in a fixed order."""
     h = hashlib.sha256()
     for root, dirs, files in os.walk(path):
         dirs.sort()
@@ -35,7 +35,7 @@ def sha256_file(path):
 
 
 def git_commit(git_dir):
-    """Commit de HEAD leyendo `.git` a mano (sin el binario de git); None si no se puede."""
+    """HEAD commit, read straight from `.git` (no git binary needed); None if unavailable."""
     try:
         with open(os.path.join(git_dir, "HEAD")) as f:
             head = f.read().strip()

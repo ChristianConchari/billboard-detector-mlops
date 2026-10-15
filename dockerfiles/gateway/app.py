@@ -1,8 +1,8 @@
-"""Gateway REST del sistema de detección de vallas publicitarias (docs/contrato.md §2).
+"""REST gateway of the billboard detector (docs/contrato.md §2).
 
-No carga el modelo: autentica (API key), limita la tasa y el tamaño de las requests,
-valida lo barato, reenvía la imagen por gRPC al servicio `inference` y traduce los
-errores a HTTP. Sin torch, MLflow ni acceso al Data Lake. Controles: docs/seguridad.md.
+It does not load the model: it authenticates (API key), rate-limits and caps request size,
+runs the cheap checks, forwards the image to the `inference` service over gRPC and maps
+errors to HTTP. No torch, no MLflow and no data-lake access. Controls: docs/seguridad.md.
 """
 
 import hmac
@@ -19,17 +19,17 @@ from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
-from vallavision.grpc_gen import detector_pb2 as pb
-from vallavision.grpc_gen import detector_pb2_grpc as pb_grpc
-from vallavision.validation import MAX_BYTES, DetectionError, check_size, check_threshold, check_type
+from billboard_detector.grpc_gen import detector_pb2 as pb
+from billboard_detector.grpc_gen import detector_pb2_grpc as pb_grpc
+from billboard_detector.validation import MAX_BYTES, DetectionError, check_size, check_threshold, check_type
 
 INFERENCE_ADDR = os.getenv("INFERENCE_ADDR", "inference:50051")
 INFERENCE_TOKEN = os.getenv("INFERENCE_TOKEN", "")
 TIMEOUT_S = float(os.getenv("GATEWAY_TIMEOUT_S", "60"))
 HEALTH_TIMEOUT_S = 5.0
-# Por clave: muy por encima de lo que atiende una réplica (~2,4 req/s); corta abusos, no tráfico legítimo
+# Per key: far above what one replica serves (~2.4 req/s); it stops abuse, not legitimate traffic
 RATE_LIMIT_PER_MIN = int(os.getenv("GATEWAY_RATE_LIMIT_PER_MIN", "600"))
-# Margen para los encabezados multipart sobre el tamaño máximo de la imagen
+# Allowance for the multipart headers on top of the maximum image size
 MAX_BODY_BYTES = MAX_BYTES + 64 * 1024
 
 
@@ -41,9 +41,9 @@ API_KEYS = _keys("GATEWAY_API_KEYS")
 ADMIN_KEYS = _keys("GATEWAY_ADMIN_KEYS")
 AUTH_DISABLED = os.getenv("GATEWAY_AUTH_DISABLED", "").lower() == "true"
 if not (API_KEYS or ADMIN_KEYS or AUTH_DISABLED):
-    raise RuntimeError("definir GATEWAY_API_KEYS (scripts/generar_env.sh) o GATEWAY_AUTH_DISABLED=true")
+    raise RuntimeError("set GATEWAY_API_KEYS (scripts/generate_env.sh) or GATEWAY_AUTH_DISABLED=true")
 
-# El DNS de Docker devuelve la IP de cada réplica de `inference`: round_robin las reparte
+# Docker's DNS returns the IP of every `inference` replica: round_robin spreads the calls
 _CHANNEL_OPTIONS = [
     ("grpc.service_config", json.dumps({"loadBalancingConfig": [{"round_robin": {}}]})),
     ("grpc.max_send_message_length", 8 * 1024 * 1024),
@@ -73,7 +73,7 @@ class ImageSize(BaseModel):
 class Detection(BaseModel):
     label: str
     score: float
-    box: list[float]  # [x_min, y_min, x_max, y_max] en píxeles de la imagen original
+    box: list[float]  # [x_min, y_min, x_max, y_max] in pixels of the original image
 
 
 class DetectResponse(BaseModel):
@@ -84,10 +84,10 @@ class DetectResponse(BaseModel):
     latency_ms: float
 
 
-# --- seguridad: API key + rate limit por clave ---------------------------------------
+# --- security: API key + per-key rate limit ---------------------------------------------
 
 class RateLimiter:
-    """Ventana deslizante de 60 s por clave, en memoria (una réplica de gateway)."""
+    """60 s sliding window per key, in memory (a single gateway replica)."""
 
     def __init__(self, per_minute):
         self.per_minute = per_minute
@@ -95,7 +95,7 @@ class RateLimiter:
         self._lock = threading.Lock()
 
     def check(self, key, now=None):
-        """None si pasa; si no, segundos hasta que se libere un lugar."""
+        """None if allowed; otherwise, seconds until a slot frees up."""
         now = time.monotonic() if now is None else now
         with self._lock:
             hits = self._hits[key]
@@ -119,22 +119,22 @@ def _authenticate(request: Request, admin: bool):
         return "anon"
     sent = request.headers.get("x-api-key", "")
     if not sent:
-        raise HTTPException(401, detail="falta X-API-Key", headers={"WWW-Authenticate": "ApiKey"})
+        raise HTTPException(401, detail="missing X-API-Key", headers={"WWW-Authenticate": "ApiKey"})
     if _match(sent, ADMIN_KEYS):
         key = sent
     elif not admin and _match(sent, API_KEYS):
         key = sent
     else:
-        raise HTTPException(403, detail="API key inválida o sin permiso")
+        raise HTTPException(403, detail="invalid API key or insufficient permissions")
     retry = limiter.check(key)
     if retry is not None:
-        raise HTTPException(429, detail="demasiadas requests", headers={"Retry-After": str(retry)})
+        raise HTTPException(429, detail="too many requests", headers={"Retry-After": str(retry)})
     return key
 
 
-# Declarar el esquema hace que /docs muestre el botón "Authorize" para cargar la clave una vez;
-# la validación la hace _authenticate (auto_error=False: los 401/403 son los del contrato)
-api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False, description="Clave de GATEWAY_API_KEYS")
+# Declaring the scheme makes /docs show the "Authorize" button to enter the key once;
+# _authenticate does the validation (auto_error=False: the 401/403 are the contract's)
+api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False, description="A key from GATEWAY_API_KEYS")
 
 
 def require_key(request: Request, _: Optional[str] = Security(api_key_scheme)):
@@ -150,17 +150,17 @@ app = FastAPI(title="Detector de Vallas Publicitarias", version="1")
 
 @app.middleware("http")
 async def limit_body(request: Request, call_next):
-    """Corta por Content-Length antes de leer el cuerpo: un upload gigante no llega a disco."""
+    """Rejects by Content-Length before reading the body: a huge upload never reaches disk."""
     if request.method in ("POST", "PUT", "PATCH"):
         length = request.headers.get("content-length")
         if length is None:
-            # Sin Content-Length y sin cuerpo (p. ej. /v1/reload) está bien; un cuerpo chunked
-            # sin largo declarado no se puede acotar antes de leerlo
+            # No Content-Length and no body (e.g. /v1/reload) is fine; a chunked body with no
+            # declared length cannot be capped before reading it
             if "transfer-encoding" in request.headers:
-                return JSONResponse({"detail": "falta Content-Length"}, status_code=411)
+                return JSONResponse({"detail": "missing Content-Length"}, status_code=411)
             return await call_next(request)
         if not length.isdigit() or int(length) > MAX_BODY_BYTES:
-            return JSONResponse({"detail": f"cuerpo > {MAX_BODY_BYTES} bytes"}, status_code=413)
+            return JSONResponse({"detail": f"body larger than {MAX_BODY_BYTES} bytes"}, status_code=413)
     return await call_next(request)
 
 
@@ -169,10 +169,10 @@ def _call(method, request, timeout):
 
 
 def _contract_status(e):
-    """Código HTTP del contrato que manda inference en el trailer `http-status` (415 vs 422)."""
+    """Contract HTTP status sent by inference in the `http-status` trailer (415 vs 422)."""
     try:
         trailer = dict(e.trailing_metadata() or ())
-    except Exception:  # noqa: BLE001 — errores de canal no traen trailer
+    except Exception:  # noqa: BLE001 — channel errors carry no trailer
         return None
     value = trailer.get("http-status", "")
     return int(value) if value in ("413", "415", "422") else None
@@ -181,14 +181,14 @@ def _contract_status(e):
 def _http_error(e: grpc.RpcError) -> HTTPException:
     status = _contract_status(e) or _HTTP_STATUS.get(e.code())
     if status is None:
-        # Errores no previstos: no reenviar detalles internos al cliente
-        print(f"inference respondió {e.code().name}: {e.details()}", flush=True)
-        return HTTPException(502, detail="error del servicio de inferencia")
+        # Unexpected errors: never forward internal details to the client
+        print(f"inference answered {e.code().name}: {e.details()}", flush=True)
+        return HTTPException(502, detail="inference service error")
     return HTTPException(status, detail=e.details())
 
 
 def _to_json(r):
-    """DetectResponse (float32) → JSON del contrato, redondeado como antes."""
+    """DetectResponse (float32) → the contract's JSON, rounded."""
     return {
         "request_id": r.request_id,
         "model": {"name": r.model.name, "version": r.model.version, "alias": r.model.alias},
@@ -220,7 +220,7 @@ def _get_model():
 
 @app.get("/livez")
 def livez():
-    """Vivo si el gateway alcanza a `inference`, tenga o no champion (healthcheck de Docker)."""
+    """Alive if the gateway reaches `inference`, with or without a champion (Docker healthcheck)."""
     return {"status": "ok", "model_loaded": _get_model().loaded}
 
 
@@ -235,22 +235,22 @@ def health():
 def model_info():
     m = _get_model()
     if not m.loaded:
-        raise HTTPException(503, detail="no hay modelo champion cargado")
+        raise HTTPException(503, detail="no champion model loaded")
     return _model_json(m)
 
 
 @app.post("/v1/reload", dependencies=[Depends(require_admin)])
 def reload_model():
-    """Fuerza la recarga del champion en el servicio de inferencia (solo claves admin).
+    """Forces the inference service to reload the champion (admin keys only).
 
-    Con varias réplicas la recibe una sola; las demás lo recogen solas (cada 30 s).
+    With several replicas only one receives it; the others pick it up on their own (every 30 s).
     """
     try:
         m = _call("Reload", pb.ReloadRequest(), TIMEOUT_S)
     except grpc.RpcError as e:
         raise _http_error(e) from None
     if not m.loaded:
-        raise HTTPException(503, detail="no hay modelo champion cargado")
+        raise HTTPException(503, detail="no champion model loaded")
     return {"version": m.model.version}
 
 
@@ -258,7 +258,7 @@ def reload_model():
 def detect(
     image: UploadFile = File(...),
     score_threshold: Optional[float] = Query(
-        None, description="0.0–1.0; por defecto el umbral calibrado del modelo"),
+        None, description="0.0–1.0; defaults to the model's calibrated threshold"),
 ):
     data = image.file.read(MAX_BYTES + 1)
     try:

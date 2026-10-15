@@ -34,7 +34,7 @@ Medido en una instalación limpia, en CPU (i7-12700F), sin GPU.
 | Qué | Resultado |
 |---|---|
 | Gate de promoción (95 imágenes de 7 videos no vistos) | **mAP 0.647**, IC 95 % 0.611–0.705 · AP50 0.930 (el release: 0.649 / 0.930) |
-| Registro de punta a punta (`registrar_modelo`) | 3,7 min, sin pasos manuales |
+| Registro de punta a punta (`register_model`) | 3,7 min, sin pasos manuales |
 | Latencia por imagen | p50 ~290 ms (8 hilos) a ~440 ms (4 hilos) |
 | Throughput | 3,3 req/s con una réplica de 8 hilos · 4,0 req/s con dos de 4 hilos |
 | Imagen del gateway / RAM del servicio | 245 MB (vs 2,3 GB con el modelo) · 647 MiB (vs 1448 con dos copias del modelo) |
@@ -60,9 +60,9 @@ Detalle, decisiones y limitaciones: [docs/arquitectura.md](docs/arquitectura.md)
 flowchart LR
     GH[GitHub release<br/>model-v1] -->|SHA-256| REG
     subgraph Airflow
-        REG[registrar_modelo<br/>gate + linaje]
-        RB[rollback_modelo]
-        MON[monitoreo_drift<br/>cada hora]
+        REG[register_model<br/>gate + linaje]
+        RB[rollback_model]
+        MON[drift_monitoring<br/>cada hora]
     end
     REG --> S3[(MinIO<br/>Data Lake)]
     REG -->|versión, métricas, alias| ML[(MLflow)]
@@ -79,11 +79,11 @@ flowchart LR
     MON -->|alerta| S3
 ```
 
-1. **Registro.** `registrar_modelo` baja los pesos del release (verifica el SHA-256 del zip), los guarda
+1. **Registro.** `register_model` baja los pesos del release (verifica el SHA-256 del zip), los guarda
    en MinIO como una versión inmutable y mide mAP, AP50 e IC sobre el `test` revisado. Cada evaluación
    queda en MLflow con el set de evaluación, su hash, el hash del código y el commit. Si supera el
    mínimo y le gana al champion (re-evaluado sobre el mismo set), pasa a `champion`; el anterior queda
-   como `anterior` para el rollback.
+   como `previous` para el rollback.
 2. **Serving.** El gateway REST es el único servicio expuesto: autentica con API key, limita la tasa
    y el tamaño, y reenvía la imagen por gRPC. `inference` es el único que tiene el modelo: valida el
    formato real y las dimensiones antes de decodificar, carga solo pesos cuyo hash coincide con el
@@ -91,7 +91,7 @@ flowchart LR
 3. **Streaming.** Las cámaras publican frames en Redpanda con la cámara como clave: todos los frames
    de una cámara caen en la misma partición y conservan su orden. El consumidor los infiere y arma ventanas de 15 s por el instante de captura, con
    tolerancia a frames desordenados, y alerta si la latencia supera el SLO.
-4. **Monitoreo.** `monitoreo_drift` compara cada hora las predicciones (REST y streaming) contra la
+4. **Monitoreo.** `drift_monitoring` compara cada hora las predicciones (REST y streaming) contra la
    referencia: chi² para la cantidad de vallas por frame, KS para score, brillo y contraste, con
    corrección de Holm. Si hay drift, deja una alerta y la corrida falla.
 
@@ -111,14 +111,14 @@ git clone https://github.com/ChristianConchari/billboard-detector-mlops.git && c
 mkdir -p data && unzip <ruta>/billboards-2025-09-14-sur-lp-*.zip -d data
 
 # 2. .env con secretos aleatorios y AIRFLOW_UID = tu UID (no se versiona)
-scripts/generar_env.sh
+scripts/generate_env.sh
 
 # 3. Levantar todo (~10 min la primera vez, por torch)
 docker compose --profile all up -d --build
 
 # 4. Registrar el modelo (~4 min): queda como champion si pasa el gate
-docker exec airflow-apiserver airflow dags unpause registrar_modelo
-docker exec airflow-apiserver airflow dags trigger registrar_modelo
+docker exec airflow-apiserver airflow dags unpause register_model
+docker exec airflow-apiserver airflow dags trigger register_model
 
 # 5. Probar
 set -a; . ./.env; set +a
@@ -136,27 +136,27 @@ build falla con `ReadTimeoutError` de PyPI, construir primero la imagen pesada
 |---|---|
 | Gateway REST | http://localhost:8800/docs (header `X-API-Key`) |
 | Airflow | http://localhost:8080 (`airflow` / `_AIRFLOW_WWW_USER_PASSWORD` de `.env`) |
-| MLflow | http://localhost:5001 (experimento `evaluaciones`: cada evaluación con su linaje) |
+| MLflow | http://localhost:5001 (experimento `evaluations`: cada evaluación con su linaje) |
 | MinIO | http://localhost:9001 (`minio` / `MINIO_SECRET_ACCESS_KEY`), bucket `data` |
 | Redpanda | `localhost:19092`, topic `frames` |
 
 Solo el gateway escucha fuera de la máquina; el resto está en `127.0.0.1`. Uso detallado (REST, gRPC,
 streaming, DAGs, escalado, tests): [docs/uso.md](docs/uso.md). Demo: el notebook
-[`notebooks/demo_deteccion_vallas.ipynb`](notebooks/demo_deteccion_vallas.ipynb) (inferencias, gRPC, seguridad, streaming y
+[`notebooks/billboard_detector_demo.ipynb`](notebooks/billboard_detector_demo.ipynb) (inferencias, gRPC, seguridad, streaming y
 drift con gráficos) más Airflow, MLflow y MinIO en el navegador ([guion](docs/demo.md)).
 
 ## Estructura del repositorio
 
 ```
-airflow/dags/          registrar_modelo, rollback_modelo, monitoreo_drift
-vallavision/           paquete compartido por los DAGs y los servicios:
+airflow/dags/          register_model, rollback_model, drift_monitoring
+billboard_detector/           paquete compartido por los DAGs y los servicios:
                        detector, servicio de inferencia, gate, drift, ventanas, integridad
 dockerfiles/           imágenes: gateway, inference, stream (consumidor), airflow, mlflow;
                        minio/init.sh crea un usuario por servicio con mínimo privilegio
 proto/                 contrato gRPC
 annotations/reviewed/  sets con cajas revisadas: gate (test) y referencia de drift (val)
-notebooks/             demo de la presentación (notebook + demo_utils.py)
-scripts/               generar_env, demo, ver_detecciones, camara_productor, benchmark
+notebooks/             demo de la presentación (notebook con el código a la vista)
+scripts/               generate_env, camera_producer, benchmark, gen_proto
 tests/                 72 tests sin el stack (corren en el CI)
 docs/                  arquitectura, contrato, seguridad, uso, demo, estado
 ```

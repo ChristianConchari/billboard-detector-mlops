@@ -1,18 +1,18 @@
-"""Métricas por frame, resumen por ventana y detección de drift (docs/contrato.md §5).
+"""Per-frame features, reference building and drift detection (docs/contrato.md §5).
 
-Cada frame se resume en 4 features. El drift se decide comparando la distribución de
-cada feature en la ventana contra la de referencia (el `val` revisado, inferido con el
-mismo modelo y el umbral calibrado):
+Every frame is summarised by 4 features. Drift is decided by comparing the distribution
+of each feature in the window against the reference (the reviewed `val` split, inferred
+with the same model and the calibrated threshold):
 
-- `n_detections` es un conteo (discreto): test chi² sobre las clases 0, 1, 2 y 3+.
-- `score_mean`, `brightness` y `contrast` son continuas: KS de dos muestras.
+- `n_detections` is a count (discrete): chi-squared test over the classes 0, 1, 2 and 3+.
+- `score_mean`, `brightness` and `contrast` are continuous: two-sample KS test.
 
-Son 4 tests por ventana, así que los p-valores se corrigen con Holm-Bonferroni para que
-la probabilidad de una falsa alarma por ventana siga siendo ≤ alpha.
+That is 4 tests per window, so p-values are corrected with Holm-Bonferroni to keep the
+probability of a false alarm per window at or below alpha.
 
-Supuesto que NO se cumple con una cámara real: frames independientes. Frames consecutivos
-están autocorrelacionados y eso infla los falsos positivos; `thin` permite quedarse con
-uno de cada k frames para atenuarlo (docs/arquitectura.md, limitaciones).
+Assumption that does NOT hold with a real camera: independent frames. Consecutive frames
+are autocorrelated, which inflates false positives; `thin` keeps one frame out of every k
+to soften it (docs/arquitectura.md, limitations).
 """
 
 import math
@@ -20,11 +20,11 @@ import math
 FEATURES = ("n_detections", "score_mean", "brightness", "contrast")
 DISCRETE = ("n_detections",)
 COUNT_BINS = 4  # 0, 1, 2, 3+
-MIN_FRAMES = 20  # con menos frames los tests no distinguen nada
+MIN_FRAMES = 20  # with fewer frames the tests cannot tell anything apart
 
 
 def image_stats(image):
-    """Brillo y contraste (media y desvío de la luminancia, 0–1) de una imagen PIL."""
+    """Brightness and contrast (mean and std of the luminance, 0–1) of a PIL image."""
     import numpy as np
 
     gray = image.convert("L")
@@ -34,7 +34,7 @@ def image_stats(image):
 
 
 def frame_features(detections, stats):
-    """Features de un frame. `score_mean` es None si no hubo detecciones."""
+    """Features of one frame. `score_mean` is None when nothing was detected."""
     scores = [d["score"] for d in detections]
     return {
         "n_detections": len(detections),
@@ -45,10 +45,10 @@ def frame_features(detections, stats):
 
 
 def usable_for_drift(record, calibrated_threshold=None):
-    """Una predicción guardada sirve para el drift solo si usó el umbral calibrado.
+    """A stored prediction counts for drift only if it used the calibrated threshold.
 
-    `n_detections` y `score_mean` dependen del umbral: un cliente que pide 0.9 no puede
-    disparar una alarma. Registros viejos sin `threshold_is_default` se descartan.
+    `n_detections` and `score_mean` depend on the threshold: a client asking for 0.9 must
+    not be able to trigger an alarm. Old records without `threshold_is_default` are skipped.
     """
     if "image_stats" not in record or not record.get("threshold_is_default", False):
         return False
@@ -58,7 +58,7 @@ def usable_for_drift(record, calibrated_threshold=None):
 
 
 def build_reference(frames):
-    """frames: lista de features por frame → referencia serializable (muestras por feature)."""
+    """frames: list of per-frame features → serialisable reference (samples per feature)."""
     return {"n_frames": len(frames),
             "samples": {f: [x[f] for x in frames if x[f] is not None] for f in FEATURES}}
 
@@ -75,18 +75,18 @@ def _count_histogram(xs):
 
 
 def _chi2_counts(ref, cur):
-    """Chi² de homogeneidad sobre el histograma de conteos (clases vacías en ambos se quitan)."""
+    """Chi-squared homogeneity test on the count histogram (classes empty in both are dropped)."""
     from scipy.stats import chi2_contingency
 
     pairs = [(a, b) for a, b in zip(_count_histogram(ref), _count_histogram(cur)) if a + b > 0]
     if len(pairs) < 2:
-        return 0.0, 1.0  # una sola clase en ambos: misma distribución
+        return 0.0, 1.0  # a single class in both: same distribution
     res = chi2_contingency([[a for a, _ in pairs], [b for _, b in pairs]])
     return float(res.statistic), float(res.pvalue)
 
 
 def holm(pvalues, alpha):
-    """Holm-Bonferroni: {clave: rechaza} controlando el error por familia en `alpha`."""
+    """Holm-Bonferroni: {key: rejected}, controlling the family-wise error at `alpha`."""
     ordered = sorted(pvalues.items(), key=lambda kv: kv[1])
     m = len(ordered)
     rejected = {}
@@ -98,16 +98,16 @@ def holm(pvalues, alpha):
 
 
 def thin(frames, k):
-    """Uno de cada k frames (atenúa la autocorrelación entre frames consecutivos)."""
+    """One frame out of every k (softens the autocorrelation between consecutive frames)."""
     return frames[::k] if k and k > 1 else frames
 
 
 def compare(reference, frames, alpha=0.01):
-    """Compara `frames` (features por frame) contra la referencia.
+    """Compares `frames` (per-frame features) against the reference.
 
-    Devuelve {"n_frames", "drift", "alpha", "metrics": {feature: {...}}}; `drift` es True si
-    algún feature rechaza H0 (misma distribución) tras la corrección de Holm. Con menos de
-    MIN_FRAMES no se decide (`drift` None).
+    Returns {"n_frames", "drift", "alpha", "metrics": {feature: {...}}}; `drift` is True if any
+    feature rejects H0 (same distribution) after the Holm correction. With fewer than
+    MIN_FRAMES there is no verdict (`drift` is None).
     """
     from scipy.stats import ks_2samp
 
@@ -141,7 +141,7 @@ def compare(reference, frames, alpha=0.01):
 
 
 def percentile(values, q):
-    """Percentil q (0–100) por rango más cercano; None si no hay valores."""
+    """q-th percentile (0–100) by nearest rank; None when there are no values."""
     if not values:
         return None
     s = sorted(values)

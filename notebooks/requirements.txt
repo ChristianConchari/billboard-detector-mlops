@@ -1,11 +1,11 @@
-# Entorno de la demo (notebook y scripts/demo.sh), del lado del cliente:
+# Environment of the demo notebook, client side:
 #   python3 -m venv .venv-demo && .venv-demo/bin/pip install -r notebooks/requirements.txt
 #
-# Las versiones compartidas con los tests (gRPC, protobuf, numpy, scipy, pillow, kafka-python) se toman de
-# requirements-dev.txt: se fijan en un solo lugar. Acá solo se fija lo exclusivo de la demo.
+# Versions shared with the tests (gRPC, protobuf, numpy, scipy, pillow, kafka-python) come from
+# requirements-dev.txt, so they are pinned in a single place. Only demo-only packages are pinned here.
 -c ../requirements-dev.txt
 
-# Compartidas (versión en requirements-dev.txt)
+# Shared (version in requirements-dev.txt)
 grpcio
 grpcio-tools
 protobuf
@@ -14,10 +14,11 @@ scipy
 pillow
 kafka-python
 
-# Exclusivas de la demo
+# Demo only
 jupyterlab==4.6.4
 ipykernel==7.4.0
 nbconvert==7.17.2
 matplotlib==3.11.2
 pandas==3.0.6
 boto3==1.43.114
+requests==2.32.5

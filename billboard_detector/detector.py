@@ -1,8 +1,8 @@
-"""Detector de vallas con la salida de docs/contrato.md §2.
+"""Billboard detector producing the output defined in docs/contrato.md §2.
 
-`BillboardDetector` es PyTorch puro (lo usan el DAG para evaluar y el servicio para
-servir) y `DetectorPyfunc` lo envuelve como modelo pyfunc de MLflow. Así lo que se
-evalúa es exactamente lo que se registra.
+`BillboardDetector` is plain PyTorch (the DAG uses it to evaluate and the service to
+serve) and `DetectorPyfunc` wraps it as an MLflow pyfunc model, so what gets evaluated
+is exactly what gets registered.
 """
 
 import io
@@ -11,12 +11,12 @@ import os
 
 import mlflow.pyfunc
 
-# Respaldo si el checkpoint no trae calibration.json
+# Fallback when the checkpoint has no calibration.json
 FALLBACK_THRESHOLD = 0.5
 
 
 def read_calibrated_threshold(weights_dir):
-    """Umbral calibrado sobre validación (calibration.json), o None si no existe."""
+    """Score threshold calibrated on validation (calibration.json), or None if missing."""
     path = os.path.join(weights_dir, "calibration.json")
     if not os.path.exists(path):
         return None
@@ -29,8 +29,8 @@ class BillboardDetector:
         import torch
         from transformers import AutoConfig, AutoImageProcessor, AutoModelForObjectDetection
 
-        # Sin esto, el backbone de timm se baja al construir el modelo aunque los pesos
-        # ya vengan en el checkpoint
+        # Without this, timm downloads the backbone while building the model even though
+        # the weights are already in the checkpoint
         config = AutoConfig.from_pretrained(weights_dir)
         if hasattr(config, "use_pretrained_backbone"):
             config.use_pretrained_backbone = False
@@ -39,7 +39,7 @@ class BillboardDetector:
         self.processor = AutoImageProcessor.from_pretrained(weights_dir)
         self.model = AutoModelForObjectDetection.from_pretrained(weights_dir, config=config).eval()
         self.id2label = {int(k): v for k, v in self.model.config.id2label.items()}
-        # None → las etiquetas del checkpoint pasan tal cual
+        # None → the checkpoint labels are used as they are
         self.label_map = label_map
         self.default_threshold = read_calibrated_threshold(weights_dir) or FALLBACK_THRESHOLD
 
@@ -50,9 +50,9 @@ class BillboardDetector:
                       if self.label_map else set(names))
 
     def detect(self, image, score_threshold=None):
-        """Devuelve ({width, height}, detecciones) con cajas xyxy en píxeles absolutos.
+        """Returns ({width, height}, detections) with xyxy boxes in absolute pixels.
 
-        `score_threshold=None` usa el umbral calibrado del checkpoint.
+        `score_threshold=None` uses the checkpoint's calibrated threshold.
         """
         from PIL import Image
 
@@ -90,9 +90,9 @@ class BillboardDetector:
 
 
 class DetectorPyfunc(mlflow.pyfunc.PythonModel):
-    """Entrada: DataFrame con la columna `image` (bytes JPEG/PNG), una fila por imagen.
-    Salida: una entrada por imagen con `image` y `detections` como en el contrato.
-    Sin `score_threshold` se usa el umbral calibrado del checkpoint."""
+    """Input: a DataFrame with an `image` column (JPEG/PNG bytes), one row per image.
+    Output: one entry per image with `image` and `detections`, as in the contract.
+    Without `score_threshold` the checkpoint's calibrated threshold is used."""
 
     def load_context(self, context):
         label_map = (context.model_config or {}).get("label_map")

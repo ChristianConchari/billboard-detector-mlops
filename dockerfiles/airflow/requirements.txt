@@ -1,14 +1,14 @@
 mlflow[extras]==3.16.1
 boto3==1.37.3
-# La de la imagen base: con click 8.5 el worker de Celery 5.5.3 no arranca (hostname None)
+# The base image's version: with click 8.5 the Celery 5.5.3 worker does not start (hostname None)
 click==8.2.1
 
-# Detector en CPU: torch sin CUDA para no sumar varios GB a la imagen
+# CPU detector: torch without CUDA, to avoid adding several GB to the image
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.14.0+cpu
 torchvision==0.29.0+cpu
 transformers==5.17.0
-# DETR construye su backbone ResNet con timm
+# The DETR family builds its ResNet backbone with timm
 timm==1.0.30
 scipy==1.18.1
 pycocotools==2.0.11

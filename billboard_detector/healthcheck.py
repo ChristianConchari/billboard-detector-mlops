@@ -1,6 +1,6 @@
-"""Healthcheck del servicio de inferencia: sano solo si responde y tiene el champion cargado.
+"""Inference service healthcheck: healthy only if it answers and has the champion loaded.
 
-    python -m vallavision.healthcheck   # exit 0 = sano
+    python -m billboard_detector.healthcheck   # exit code 0 = healthy
 """
 
 import os
@@ -8,8 +8,8 @@ import sys
 
 import grpc
 
-from vallavision.grpc_gen import detector_pb2 as pb
-from vallavision.grpc_gen import detector_pb2_grpc as pb_grpc
+from billboard_detector.grpc_gen import detector_pb2 as pb
+from billboard_detector.grpc_gen import detector_pb2_grpc as pb_grpc
 
 
 def main():
@@ -20,9 +20,9 @@ def main():
         try:
             info = pb_grpc.DetectorStub(channel).GetModel(pb.GetModelRequest(), timeout=3, metadata=metadata)
         except grpc.RpcError as e:
-            sys.exit(f"inference no responde: {e.code().name}")
+            sys.exit(f"inference is not responding: {e.code().name}")
     if not info.loaded:
-        sys.exit("inference sin champion cargado")
+        sys.exit("inference has no champion loaded")
 
 
 if __name__ == "__main__":

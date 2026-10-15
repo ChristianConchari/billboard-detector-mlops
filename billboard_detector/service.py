@@ -1,8 +1,9 @@
-"""Servicio de detección compartido por REST y gRPC (docs/contrato.md).
+"""Detection service behind the gRPC server (docs/contrato.md).
 
-Carga el modelo con alias `champion` desde MLflow/MinIO (verificando el SHA-256 de los
-pesos), valida la imagen, arma la respuesta del contrato §2 y persiste cada predicción
-en `predictions/` (§4). Las imágenes no se guardan (caras y patentes; ver docs/seguridad.md).
+Loads the model aliased `champion` from MLflow/MinIO (verifying the weights' SHA-256),
+validates the image, builds the response defined in contract §2 and persists every
+prediction under `predictions/` (§4). Images are not stored (faces and license plates;
+see docs/seguridad.md).
 """
 
 import io
@@ -14,9 +15,9 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from vallavision.drift import image_stats
-from vallavision.integrity import sha256_dir
-from vallavision.validation import (  # noqa: F401 — reexportados para quien importe desde service
+from billboard_detector.drift import image_stats
+from billboard_detector.integrity import sha256_dir
+from billboard_detector.validation import (  # noqa: F401 — re-exported for importers of service
     MAX_BYTES,
     MAX_SIDE,
     DetectionError,
@@ -32,7 +33,7 @@ MODEL_NAME = os.getenv("MODEL_NAME", "billboard-detector")
 ALIAS = os.getenv("MODEL_ALIAS", "champion")
 BUCKET = os.getenv("DATA_REPO_BUCKET_NAME", "data")
 MLFLOW_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
-# Métricas del run de evaluación que se publican en /v1/model (las de gate)
+# Metrics of the evaluation run published through /v1/model (the gate metrics)
 PUBLIC_METRICS = ("gate_map", "gate_map_50", "gate_map_ci_low", "gate_map_ci_high")
 
 
@@ -43,13 +44,13 @@ def _s3():
 
 
 class IntegrityError(Exception):
-    """Los pesos descargados no coinciden con el SHA-256 registrado en MLflow."""
+    """The downloaded weights do not match the SHA-256 registered in MLflow."""
 
 
 class DetectionService:
     def __init__(self):
-        # (detector, info) se reemplaza entero: una request nunca ve el detector de una
-        # versión con la info de otra
+        # (detector, info) is replaced as a whole: a request never sees one version's
+        # detector together with another version's info
         self._model = None
         self._load_lock = threading.Lock()
         self._s3 = None
@@ -66,13 +67,13 @@ class DetectionService:
         self._model = (detector, info)
 
     def load_champion(self):
-        """Carga (o recarga) el champion. Devuelve la versión; no hace nada si ya es la actual."""
+        """Loads (or reloads) the champion. Returns its version; no-op if already loaded."""
         import mlflow
         from mlflow.tracking import MlflowClient
 
-        from vallavision.detector import BillboardDetector
+        from billboard_detector.detector import BillboardDetector
 
-        # Un solo load a la vez: el loop de 30 s y un Reload no cargan dos copias en paralelo
+        # One load at a time: the 30 s loop and a Reload never load two copies in parallel
         with self._load_lock:
             mlflow.set_tracking_uri(MLFLOW_URI)
             client = MlflowClient()
@@ -83,7 +84,7 @@ class DetectionService:
             uri = mv.tags["weights_uri"]
             expected = mv.tags.get("weights_dir_sha256") or mv.tags.get("weights_sha256")
             if not expected:
-                raise IntegrityError(f"la versión {mv.version} no tiene weights_dir_sha256: no se carga")
+                raise IntegrityError(f"version {mv.version} has no weights_dir_sha256: refusing to load it")
             prefix = uri[len(f"s3://{BUCKET}/"):]
             s3 = _s3()
             with tempfile.TemporaryDirectory() as tmp:
@@ -96,8 +97,8 @@ class DetectionService:
                             s3.download_file(BUCKET, obj["Key"], path)
                 actual = sha256_dir(tmp)
                 if actual != expected:
-                    raise IntegrityError(f"SHA-256 de {uri} = {actual[:12]}…, MLflow dice {expected[:12]}…")
-                detector = BillboardDetector(tmp)  # los pesos quedan en memoria; tmp se borra
+                    raise IntegrityError(f"SHA-256 of {uri} is {actual[:12]}…, MLflow expects {expected[:12]}…")
+                detector = BillboardDetector(tmp)  # the weights stay in memory; tmp is deleted
 
             eval_run = mv.tags.get("eval_run_id") or mv.run_id
             metrics = client.get_run(eval_run).data.metrics
@@ -117,10 +118,10 @@ class DetectionService:
         return {"name": i["name"], "version": i["version"], "alias": i["alias"]}
 
     def detect(self, image_bytes, content_type=None, score_threshold=None, received_at=None):
-        """Valida, infiere y arma el JSON del contrato §2 más los campos de monitoreo.
+        """Validates, runs inference and builds the contract §2 JSON plus monitoring fields.
 
-        `received_at` (perf_counter) es cuándo llegó la request: `latency_ms` incluye la
-        espera por un turno de inferencia y el decodificado, no solo el forward.
+        `received_at` (perf_counter) is when the request arrived: `latency_ms` includes the
+        wait for an inference slot and the decoding, not just the forward pass.
         """
         started = received_at if received_at is not None else time.perf_counter()
         model = self._model
@@ -134,20 +135,20 @@ class DetectionService:
         from PIL import Image, ImageOps, UnidentifiedImageError
 
         try:
-            # open() solo lee el encabezado: formato y tamaño se validan antes de decodificar
+            # open() only reads the header: format and size are validated before decoding
             image = Image.open(io.BytesIO(image_bytes))
         except Image.DecompressionBombError as e:
-            raise DetectionError(422, f"lado mayor > {MAX_SIDE} px") from e
+            raise DetectionError(422, f"longest side larger than {MAX_SIDE} px") from e
         except (UnidentifiedImageError, OSError) as e:
-            raise DetectionError(422, "imagen ilegible") from e
+            raise DetectionError(422, "unreadable image") from e
         check_format(image.format)
         check_dimensions(*image.size)
         try:
             image.load()
-            # Las cajas se devuelven sobre la imagen como se ve, no como está guardada
+            # Boxes refer to the image as displayed, not as stored
             image = ImageOps.exif_transpose(image)
         except (OSError, SyntaxError, ValueError) as e:
-            raise DetectionError(422, "imagen ilegible") from e
+            raise DetectionError(422, "unreadable image") from e
 
         threshold = score_threshold if score_threshold is not None else detector.default_threshold
         t0 = time.perf_counter()
@@ -159,7 +160,7 @@ class DetectionService:
             "image": size,
             "detections": detections,
             "latency_ms": round((time.perf_counter() - started) * 1000, 1),
-            # Solo para monitoreo: REST/gRPC los descartan, quedan en predictions/
+            # Monitoring only: REST/gRPC drop these, they are kept in predictions/
             "inference_ms": round(inference_ms, 1),
             "score_threshold": round(float(threshold), 4),
             "threshold_is_default": score_threshold is None,
@@ -167,7 +168,7 @@ class DetectionService:
         }
 
     def persist(self, response):
-        """predictions/date=…/<request_id>.json. No debe tumbar la request si falla."""
+        """predictions/date=…/<request_id>.json. A failure must never break the request."""
         try:
             if self._s3 is None:
                 self._s3 = _s3()
@@ -180,5 +181,5 @@ class DetectionService:
                 Body=json.dumps(record).encode(),
                 ContentType="application/json",
             )
-        except Exception as e:  # noqa: BLE001 — la persistencia es best-effort
-            print(f"no se pudo guardar la predicción {response['request_id']}: {e}")
+        except Exception as e:  # noqa: BLE001 — persistence is best-effort
+            print(f"could not store prediction {response['request_id']}: {e}")

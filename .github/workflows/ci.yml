@@ -13,19 +13,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Dependencias de los tests (sin el stack)
+      - name: Test dependencies (no stack needed)
         run: pip install -r requirements-dev.txt
       - name: Tests
         run: pytest -q tests
-      - name: Los DAGs compilan
+      - name: DAGs compile
         run: python -m py_compile airflow/dags/*.py
 
   compose:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: docker compose config con un .env generado
+      - name: docker compose config with a generated .env
         run: |
-          scripts/generar_env.sh
+          scripts/generate_env.sh
           docker compose --profile all config -q
           docker compose -f docker-compose.yaml -f docker-compose.scale.yaml --profile all config -q

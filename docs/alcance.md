@@ -9,7 +9,7 @@
 > | Planeado acá | Implementado |
 > |---|---|
 > | Un "ViT de detección"; un detector público como sustituto si no llegaba | RT-DETR ResNet-50 fine-tuned (híbrido CNN-transformer) del release `model-v1`; no hizo falta sustituto |
-> | Promoción `Staging` → `Production` | Aliases de MLflow 3: `champion`, `challenger`, `anterior` (las stages están deprecadas) |
+> | Promoción `Staging` → `Production` | Aliases de MLflow 3: `champion`, `challenger`, `previous` (las stages están deprecadas) |
 > | Evaluar sobre "un conjunto de validación pequeño" | Gate sobre el `test` revisado (no usado en entrenamiento ni calibración), con IC por bootstrap y champion re-evaluado sobre el mismo set |
 > | GraphQL "por confirmar" | Evaluado y descartado: no hay un cliente que componga consultas (ver arquitectura.md, "Qué se dejó afuera") |
 > | Seguridad avanzada fuera de alcance | Seguridad SAIF en el gateway, gRPC y MinIO. Siguen fuera: aprendizaje federado y desenfoque de caras y patentes |
@@ -52,7 +52,7 @@ El **entrenamiento es opcional** (ver 2.3): solo se incorpora si el flujo de ent
 
 **Condición para incluirla** (decidir antes del checkpoint de la Sesión 6): un flujo de entrenamiento reproducible y un dataset claro, versionado y suficiente.
 
-Si se incluye: un DAG `entrenar_modelo` que lee el dataset desde MinIO, entrena el ViT, registra parámetros, métricas (mAP) y artefacto en MLflow, y deja el modelo en `Staging` para pasar por `registrar_modelo`. Como el entrenamiento en CPU es lento, se ejecutaría fuera del orquestador (máquina con GPU) y solo se registraría el resultado.
+Si se incluye: un DAG `entrenar_modelo` que lee el dataset desde MinIO, entrena el ViT, registra parámetros, métricas (mAP) y artefacto en MLflow, y deja el modelo en `Staging` para pasar por `register_model`. Como el entrenamiento en CPU es lento, se ejecutaría fuera del orquestador (máquina con GPU) y solo se registraría el resultado.
 
 Si no se incluye: se documenta como trabajo futuro y no hay cambios en el resto.
 
@@ -69,7 +69,7 @@ Si no se incluye: se documenta como trabajo futuro y no hay cambios en el resto.
 ```
  frames / imágenes ──► MinIO (raw) ──┐
                                      ▼
- pesos del ViT ──► Airflow: registrar_modelo ──► MLflow Registry ──► MinIO (artefactos)
+ pesos del ViT ──► Airflow: register_model ──► MLflow Registry ──► MinIO (artefactos)
                                                        │
                                                        ▼ (modelo en Production)
                   ┌─────────────── servicio de inferencia ───────────────┐
@@ -79,13 +79,13 @@ Si no se incluye: se documenta como trabajo futuro y no hay cambios en el resto.
                   └────────────────────────────────────────────────────────┘
                                        │
                                        ▼
-                     Airflow: monitoreo_drift ──► reporte / alerta
+                     Airflow: drift_monitoring ──► reporte / alerta
 ```
 
 ### DAGs de Airflow
 
-1. **`registrar_modelo`**: toma los pesos del ViT, los sube a MinIO, corre una evaluación sobre un conjunto de validación pequeño, registra métricas y versión en MLflow y promueve a `Production` si supera un umbral.
-2. **`monitoreo_drift`**: periódico. Lee las detecciones recientes, calcula estadísticas contra una referencia y emite un reporte o alerta.
+1. **`register_model`**: toma los pesos del ViT, los sube a MinIO, corre una evaluación sobre un conjunto de validación pequeño, registra métricas y versión en MLflow y promueve a `Production` si supera un umbral.
+2. **`drift_monitoring`**: periódico. Lee las detecciones recientes, calcula estadísticas contra una referencia y emite un reporte o alerta.
 
 ## 5. Decisiones abiertas
 
@@ -116,9 +116,9 @@ Si no se incluye: se documenta como trabajo futuro y no hay cambios en el resto.
 | Hito | Fecha | Entregable |
 |---|---|---|
 | Hito #1 · diseño (Sesión 4) | [POR DEFINIR] | Este documento, diagrama de arquitectura y plan. |
-| Núcleo funcionando | Antes de la Sesión 6 | Compose con MinIO, MLflow y Airflow; DAG `registrar_modelo`; REST `/v1/detect`. |
+| Núcleo funcionando | Antes de la Sesión 6 | Compose con MinIO, MLflow y Airflow; DAG `register_model`; REST `/v1/detect`. |
 | Checkpoint (Sesión 6) | [POR DEFINIR] | Demo del núcleo más avance de gRPC. |
-| Diferencial completo | Antes de la Sesión 8 | gRPC, streaming con drift y DAG `monitoreo_drift`. |
+| Diferencial completo | Antes de la Sesión 8 | gRPC, streaming con drift y DAG `drift_monitoring`. |
 | Defensa (Sesión 8) | [POR DEFINIR] | Presentación con los slides. |
 | Repo final | 1 semana después | Repo con README, instrucciones y slides; link por el aula virtual. |
 

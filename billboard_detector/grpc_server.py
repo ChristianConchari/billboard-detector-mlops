@@ -1,11 +1,11 @@
-"""Servicio de inferencia del sistema de detección de vallas: único dueño del modelo (docs/contrato.md §3).
+"""Inference service of the billboard detector: the only owner of the model (docs/contrato.md §3).
 
-Lo consumen el gateway REST y el consumidor de streaming (servicio interno). Se puede
-escalar con réplicas: cada una carga su copia del modelo y atiende `INFERENCE_CONCURRENCY`
-forward a la vez (1 por defecto: en CPU un forward ya usa los hilos que tiene).
+Its clients are the REST gateway and the streaming consumer (it is an internal service). It
+scales with replicas: each one loads its own copy of the model and runs `INFERENCE_CONCURRENCY`
+forward passes at a time (1 by default: on CPU a forward pass already uses every thread it has).
 
-Si `INFERENCE_TOKEN` está definido, cada llamada tiene que traer el metadata
-`authorization: Bearer <token>` (interceptor; ver docs/seguridad.md).
+When `INFERENCE_TOKEN` is set, every call must carry the metadata
+`authorization: Bearer <token>` (interceptor; see docs/seguridad.md).
 """
 
 import hmac
@@ -16,15 +16,15 @@ from concurrent import futures
 
 import grpc
 
-from vallavision.grpc_gen import detector_pb2 as pb
-from vallavision.grpc_gen import detector_pb2_grpc as pb_grpc
-from vallavision.service import DetectionError, DetectionService, ModelNotLoaded
+from billboard_detector.grpc_gen import detector_pb2 as pb
+from billboard_detector.grpc_gen import detector_pb2_grpc as pb_grpc
+from billboard_detector.service import DetectionError, DetectionService, ModelNotLoaded
 
 PORT = int(os.getenv("GRPC_PORT", "50051"))
 CONCURRENCY = int(os.getenv("INFERENCE_CONCURRENCY", "1"))
 RELOAD_RETRY_SECONDS = 30
-# Cerrar las conexiones viejas obliga a los clientes (el gateway) a re-resolver el DNS y
-# descubrir réplicas nuevas: sin esto un canal creado con 1 réplica nunca usa la 2.ª
+# Closing old connections forces clients (the gateway) to re-resolve DNS and discover new
+# replicas: without this, a channel created with 1 replica never uses the 2nd one
 CONNECTION_AGE_MS = int(os.getenv("GRPC_MAX_CONNECTION_AGE_S", "30")) * 1000
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 _SLOT_POLL_S = 0.1
@@ -37,7 +37,7 @@ _STATUS = {
 
 
 class Cancelled(Exception):
-    """El cliente se fue (deadline o cancelación): no se infiere ni se persiste."""
+    """The client left (deadline or cancellation): nothing is inferred or persisted."""
 
 
 def to_proto(r, frame_id=""):
@@ -67,13 +67,13 @@ def model_info(service):
 
 
 class TokenInterceptor(grpc.ServerInterceptor):
-    """Rechaza con UNAUTHENTICATED las llamadas sin `authorization: Bearer <token>`."""
+    """Rejects calls without `authorization: Bearer <token>` with UNAUTHENTICATED."""
 
     def __init__(self, token):
         self._expected = f"Bearer {token}".encode()
 
         def deny(request, context):
-            context.abort(grpc.StatusCode.UNAUTHENTICATED, "token inválido o ausente")
+            context.abort(grpc.StatusCode.UNAUTHENTICATED, "missing or invalid token")
 
         self._deny = deny
 
@@ -83,7 +83,7 @@ class TokenInterceptor(grpc.ServerInterceptor):
             return continuation(handler_call_details)
         if continuation(handler_call_details) is None:
             return None
-        return grpc.unary_unary_rpc_method_handler(self._deny)  # todos los RPCs son unarios
+        return grpc.unary_unary_rpc_method_handler(self._deny)  # every RPC is unary
 
 
 class DetectorServicer(pb_grpc.DetectorServicer):
@@ -92,7 +92,7 @@ class DetectorServicer(pb_grpc.DetectorServicer):
         self._slots = threading.BoundedSemaphore(concurrency)
 
     def _acquire(self, context):
-        # Esperar turno sin bloquear para siempre: si el cliente ya se fue, no hay que inferir
+        # Wait for a slot without blocking forever: if the client already left, skip inference
         while not self._slots.acquire(timeout=_SLOT_POLL_S):
             if not context.is_active():
                 raise Cancelled()
@@ -101,7 +101,7 @@ class DetectorServicer(pb_grpc.DetectorServicer):
             raise Cancelled()
 
     def _infer(self, request, context):
-        """Una imagen → respuesta (dict). Lanza DetectionError, ModelNotLoaded o Cancelled."""
+        """One image → response dict. Raises DetectionError, ModelNotLoaded or Cancelled."""
         received = time.perf_counter()
         threshold = request.score_threshold if request.HasField("score_threshold") else None
         self._acquire(context)
@@ -118,16 +118,16 @@ class DetectorServicer(pb_grpc.DetectorServicer):
         try:
             return to_proto(self._infer(request, context), request.frame_id)
         except ModelNotLoaded:
-            context.abort(grpc.StatusCode.UNAVAILABLE, "no hay modelo champion cargado")
+            context.abort(grpc.StatusCode.UNAVAILABLE, "no champion model loaded")
         except DetectionError as e:
-            # gRPC no distingue 415 de 422: el código del contrato viaja en el trailer
+            # gRPC cannot tell 415 from 422: the contract's status travels in the trailer
             context.set_trailing_metadata([("http-status", str(e.status))])
             context.abort(_STATUS[e.status], e.message)
         except Cancelled:
-            context.abort(grpc.StatusCode.CANCELLED, "el cliente canceló la llamada")
-        except Exception as e:  # noqa: BLE001 — no filtrar detalles internos al cliente
-            print(f"error interno en Detect: {type(e).__name__}: {e}", flush=True)
-            context.abort(grpc.StatusCode.INTERNAL, "error interno del servicio de inferencia")
+            context.abort(grpc.StatusCode.CANCELLED, "the client cancelled the call")
+        except Exception as e:  # noqa: BLE001 — never leak internal details to the client
+            print(f"internal error in Detect: {type(e).__name__}: {e}", flush=True)
+            context.abort(grpc.StatusCode.INTERNAL, "internal error in the inference service")
 
     def GetModel(self, request, context):
         return model_info(self.service)
@@ -135,9 +135,9 @@ class DetectorServicer(pb_grpc.DetectorServicer):
     def Reload(self, request, context):
         try:
             self.service.load_champion()
-        except Exception as e:  # noqa: BLE001 — MLflow/MinIO caídos, sin champion o pesos alterados
-            print(f"Reload falló: {type(e).__name__}: {e}", flush=True)
-            context.abort(grpc.StatusCode.UNAVAILABLE, "no se pudo cargar el champion")
+        except Exception as e:  # noqa: BLE001 — MLflow/MinIO down, no champion or tampered weights
+            print(f"Reload failed: {type(e).__name__}: {e}", flush=True)
+            context.abort(grpc.StatusCode.UNAVAILABLE, "could not load the champion")
         return model_info(self.service)
 
 
@@ -165,24 +165,25 @@ def main():
 
     token = os.getenv("INFERENCE_TOKEN")
     if not token:
-        print("ADVERTENCIA: INFERENCE_TOKEN vacío, el servicio acepta llamadas sin autenticar", flush=True)
+        print("WARNING: INFERENCE_TOKEN is empty, the service accepts unauthenticated calls", flush=True)
     service = DetectionService()
-    # Sirve ya (Detect → UNAVAILABLE) y busca el champion en segundo plano: el DAG puede no haber corrido
+    # Serve right away (Detect → UNAVAILABLE) and look for the champion in the background:
+    # the DAG may not have run yet
     server = build_server(service, token)
     server.add_insecure_port(f"[::]:{PORT}")
     server.start()
-    print(f"gRPC escuchando en :{PORT} (concurrencia {CONCURRENCY}"
-          f"{', hilos torch ' + threads if threads else ''})", flush=True)
+    print(f"gRPC listening on :{PORT} (concurrency {CONCURRENCY}"
+          f"{', torch threads ' + threads if threads else ''})", flush=True)
     announced = None
     while True:
         try:
             version = service.load_champion()
             if version != announced:
-                print(f"modelo champion v{version} cargado", flush=True)
+                print(f"champion model v{version} loaded", flush=True)
                 announced = version
         except Exception as e:  # noqa: BLE001
             if not service.loaded or "SHA-256" in str(e):
-                print(f"sin champion cargable ({type(e).__name__}): {e}", flush=True)
+                print(f"no loadable champion ({type(e).__name__}): {e}", flush=True)
         time.sleep(RELOAD_RETRY_SECONDS)
 
 

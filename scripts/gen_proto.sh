@@ -1,10 +1,10 @@
 #!/bin/sh
-# Genera vallavision/grpc_gen/ desde proto/detector.proto (requiere grpcio-tools).
+# Generates billboard_detector/grpc_gen/ from proto/detector.proto (requires grpcio-tools).
 set -e
 cd "$(dirname "$0")/.."
-mkdir -p vallavision/grpc_gen
+mkdir -p billboard_detector/grpc_gen
 "${PYTHON:-python}" -m grpc_tools.protoc -I proto \
-  --python_out=vallavision/grpc_gen --grpc_python_out=vallavision/grpc_gen proto/detector.proto
-# protoc genera `import detector_pb2`; dentro del paquete tiene que ser relativo
-sed -i 's/^import detector_pb2/from . import detector_pb2/' vallavision/grpc_gen/detector_pb2_grpc.py
-touch vallavision/grpc_gen/__init__.py
+  --python_out=billboard_detector/grpc_gen --grpc_python_out=billboard_detector/grpc_gen proto/detector.proto
+# protoc emits `import detector_pb2`; inside the package it has to be relative
+sed -i 's/^import detector_pb2/from . import detector_pb2/' billboard_detector/grpc_gen/detector_pb2_grpc.py
+touch billboard_detector/grpc_gen/__init__.py

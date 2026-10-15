@@ -1,22 +1,22 @@
-// Espejo de docs/contrato.md §2: mismos campos que REST, pero la imagen viaja como bytes.
-// Servicio interno (gateway y consumidor de streaming → inference): solo RPCs unarios.
+// Mirrors docs/contrato.md §2: same fields as REST, but the image travels as raw bytes.
+// Internal service (gateway and streaming consumer → inference): unary RPCs only.
 syntax = "proto3";
 
-package vallavision.v1;
+package billboard_detector.v1;
 
 service Detector {
-  // Una imagen → sus detecciones.
+  // One image → its detections.
   rpc Detect(DetectRequest) returns (DetectResponse);
-  // Modelo cargado en este servidor (lo usa el gateway para /health y /v1/model).
+  // Model loaded in this server (the gateway uses it for /health and /v1/model).
   rpc GetModel(GetModelRequest) returns (ModelInfo);
-  // Fuerza la búsqueda del champion en MLflow; devuelve el modelo resultante.
+  // Forces a lookup of the champion in MLflow; returns the resulting model.
   rpc Reload(ReloadRequest) returns (ModelInfo);
 }
 
 message DetectRequest {
-  bytes image = 1;                    // JPEG o PNG, ≤ 5 MB, lado mayor ≤ 4096 px
-  optional float score_threshold = 2; // 0.0–1.0; sin valor usa el umbral calibrado del modelo
-  string frame_id = 3;                // opcional; se devuelve igual en la respuesta (trazabilidad)
+  bytes image = 1;                    // JPEG or PNG, ≤ 5 MB, longest side ≤ 4096 px
+  optional float score_threshold = 2; // 0.0–1.0; when unset, the model's calibrated threshold
+  string frame_id = 3;                // optional; returned unchanged in the response (traceability)
 }
 
 message ModelRef {
@@ -33,16 +33,16 @@ message ImageSize {
 message Detection {
   string label = 1;
   float score = 2;
-  repeated float box = 3; // [x_min, y_min, x_max, y_max] en píxeles de la imagen original
+  repeated float box = 3; // [x_min, y_min, x_max, y_max] in pixels of the original image
 }
 
 message DetectResponse {
   string request_id = 1;
   ModelRef model = 2;
   ImageSize image = 3;
-  repeated Detection detections = 4; // ordenadas por score descendente
-  float latency_ms = 5;                 // en el servidor: espera de turno + decodificado + forward
-  string frame_id = 6;                  // el de la request
+  repeated Detection detections = 4; // sorted by descending score
+  float latency_ms = 5;                 // server side: wait for a slot + decoding + forward pass
+  string frame_id = 6;                  // the request's frame_id
 }
 
 message GetModelRequest {}
@@ -50,10 +50,10 @@ message GetModelRequest {}
 message ReloadRequest {}
 
 message ModelInfo {
-  bool loaded = 1;                  // false mientras no haya champion
+  bool loaded = 1;                  // false until there is a champion
   ModelRef model = 2;
   repeated string labels = 3;
-  float score_threshold = 4;        // umbral calibrado por defecto
-  map<string, double> metrics = 5;  // métricas del gate (gate_map, gate_map_50, IC 95 %)
-  string eval_set = 6;              // set sobre el que se midieron, p. ej. reviewed/test.json@<sha>
+  float score_threshold = 4;        // default (calibrated) threshold
+  map<string, double> metrics = 5;  // gate metrics (gate_map, gate_map_50, 95 % CI)
+  string eval_set = 6;              // set they were measured on, e.g. reviewed/test.json@<sha>
 }

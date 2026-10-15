@@ -28,16 +28,16 @@ x-airflow-common: &airflow-common
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor # LocalExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${PG_USER:-airflow}:${PG_PASSWORD:?falta en .env}@postgres/${PG_DATABASE:-airflow}
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${PG_USER:-airflow}:${PG_PASSWORD:?falta en .env}@postgres/${PG_DATABASE:-airflow}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${PG_USER:-airflow}:${PG_PASSWORD:?missing in .env}@postgres/${PG_DATABASE:-airflow}
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${PG_USER:-airflow}:${PG_PASSWORD:?missing in .env}@postgres/${PG_DATABASE:-airflow}
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
     AIRFLOW__CELERY__WORKER_CONCURRENCY: '2'
-    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${PG_USER:-airflow}:${PG_PASSWORD:?falta en .env}@postgres/${PG_DATABASE:-airflow}
-    # Secretos sin valores por defecto: los genera scripts/generar_env.sh en .env (no versionado)
-    AIRFLOW__CORE__FERNET_KEY: '${AIRFLOW_FERNET_KEY:?falta en .env: correr scripts/generar_env.sh}'
-    AIRFLOW__CORE__SECRET_KEY: '${AIRFLOW_SECRET_KEY:?falta en .env: correr scripts/generar_env.sh}'
-    AIRFLOW__API__SECRET_KEY: '${AIRFLOW_SECRET_KEY:?falta en .env: correr scripts/generar_env.sh}'
-    AIRFLOW__API_AUTH__JWT_SECRET: '${AIRFLOW_API_JWT_SECRET:?falta en .env: correr scripts/generar_env.sh}'
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${PG_USER:-airflow}:${PG_PASSWORD:?missing in .env}@postgres/${PG_DATABASE:-airflow}
+    # Secrets without defaults: scripts/generate_env.sh writes them to .env (not versioned)
+    AIRFLOW__CORE__FERNET_KEY: '${AIRFLOW_FERNET_KEY:?missing in .env: run scripts/generate_env.sh}'
+    AIRFLOW__CORE__SECRET_KEY: '${AIRFLOW_SECRET_KEY:?missing in .env: run scripts/generate_env.sh}'
+    AIRFLOW__API__SECRET_KEY: '${AIRFLOW_SECRET_KEY:?missing in .env: run scripts/generate_env.sh}'
+    AIRFLOW__API_AUTH__JWT_SECRET: '${AIRFLOW_API_JWT_SECRET:?missing in .env: run scripts/generate_env.sh}'
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false' # Change to 'false' to remove the tutorials and examples
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
@@ -46,11 +46,11 @@ x-airflow-common: &airflow-common
     AIRFLOW__SECRETS__BACKEND: airflow.secrets.local_filesystem.LocalFilesystemBackend
     AIRFLOW__SECRETS__BACKEND_KWARGS: '{"variables_file_path": "/opt/secrets/variables.yaml", "connections_file_path": "/opt/secrets/connections.yaml"}'
     AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minio}
-    AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY:?falta en .env}
+    AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY:?missing in .env}
     AWS_ENDPOINT_URL_S3: http://s3:9000
     MLFLOW_S3_ENDPOINT_URL: http://s3:9000
     MLFLOW_TRACKING_URI: http://mlflow:5000
-    # Los DAGs evalúan y entrenan con los mismos hilos que una réplica de inference
+    # DAGs evaluate with the same number of threads as an inference replica
     TORCH_NUM_THREADS: ${TORCH_NUM_THREADS:-4}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-./airflow}/dags:/opt/airflow/dags
@@ -58,14 +58,14 @@ x-airflow-common: &airflow-common
     - ${AIRFLOW_PROJ_DIR:-./airflow}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-./airflow}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-./airflow}/secrets:/opt/secrets
-    # Dataset local que sube el DAG registrar_modelo a MinIO
+    # Local dataset that the register_model DAG uploads to MinIO
     - ./data:/opt/airflow/data:ro
-    # Sets revisados (versionados): gate y referencia de drift
+    # Reviewed (versioned) sets: gate and drift reference
     - ./annotations:/opt/airflow/annotations:ro
-    # Linaje: el DAG registra el commit de HEAD (solo lectura, sin binario de git)
+    # Lineage: the DAG records the HEAD commit (read-only, no git binary needed)
     - ./.git:/opt/airflow/repo-git:ro
-    # Paquete compartido con la API (detector y servicio)
-    - ./vallavision:/opt/airflow/dags/vallavision:ro
+    # Package shared with the services (detector, service, drift)
+    - ./billboard_detector:/opt/airflow/dags/billboard_detector:ro
   networks:
     - backend
   user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}"
@@ -93,7 +93,7 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_DB=${PG_DATABASE:-airflow}
       - POSTGRES_USER=${PG_USER:-airflow}
-      - POSTGRES_PASSWORD=${PG_PASSWORD:?falta en .env}
+      - POSTGRES_PASSWORD=${PG_PASSWORD:?missing in .env}
       - POSTGRES_DATABASE=${PG_DATABASE:-airflow}
       - POSTGRES_PORT=${PG_PORT:-5432}
     volumes:
@@ -133,7 +133,7 @@ services:
       - backend
     environment:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minio}
-      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_ACCESS_KEY:?falta en .env}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_ACCESS_KEY:?missing in .env}
     volumes:
       - minio_data:/data
     command: server /data --console-address :9001
@@ -157,14 +157,14 @@ services:
       - backend
     environment:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minio}
-      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_ACCESS_KEY:?falta en .env}
-      - INFERENCE_S3_SECRET=${INFERENCE_S3_SECRET:?falta en .env}
-      - STREAM_S3_SECRET=${STREAM_S3_SECRET:?falta en .env}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_ACCESS_KEY:?missing in .env}
+      - INFERENCE_S3_SECRET=${INFERENCE_S3_SECRET:?missing in .env}
+      - STREAM_S3_SECRET=${STREAM_S3_SECRET:?missing in .env}
       - BUCKET=${DATA_REPO_BUCKET_NAME:-data}
       - MLFLOW_BUCKET=${MLFLOW_BUCKET_NAME:-mlflow}
     volumes:
       - ./dockerfiles/minio:/policies:ro
-    # Buckets + un usuario por servicio con solo los prefijos que necesita (docs/seguridad.md)
+    # Buckets + one user per service with only the prefixes it needs (docs/seguridad.md)
     entrypoint: ["/bin/sh", "/policies/init.sh"]
 
   mlflow:
@@ -184,11 +184,11 @@ services:
       - backend
     environment:
       - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minio}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_ACCESS_KEY:?falta en .env}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_ACCESS_KEY:?missing in .env}
       - MLFLOW_S3_ENDPOINT_URL=http://s3:9000
     command: >
       mlflow server 
-      --backend-store-uri postgresql://${PG_USER:-airflow}:${PG_PASSWORD:?falta en .env}@postgres:5432/mlflow_db
+      --backend-store-uri postgresql://${PG_USER:-airflow}:${PG_PASSWORD:?missing in .env}@postgres:5432/mlflow_db
       --host 0.0.0.0
       --default-artifact-root s3://${MLFLOW_BUCKET_NAME:-mlflow}/
       --workers 1
@@ -199,8 +199,8 @@ services:
       timeout: 10s
       retries: 3
 
-  # Gateway REST: único servicio expuesto fuera de la máquina. Sin modelo ni torch:
-  # autentica (API key), limita tasa y tamaño, valida y reenvía por gRPC a `inference`.
+  # REST gateway: the only service exposed outside the machine. No model, no torch:
+  # authenticates (API key), limits rate and size, validates and forwards to `inference` over gRPC.
   gateway:
     restart: always
     build:
@@ -220,12 +220,12 @@ services:
       - backend
     environment:
       - INFERENCE_ADDR=inference:50051
-      - INFERENCE_TOKEN=${INFERENCE_TOKEN:?falta en .env}
-      - GATEWAY_API_KEYS=${GATEWAY_API_KEYS:?falta en .env}
-      - GATEWAY_ADMIN_KEYS=${GATEWAY_ADMIN_KEYS:?falta en .env}
+      - INFERENCE_TOKEN=${INFERENCE_TOKEN:?missing in .env}
+      - GATEWAY_API_KEYS=${GATEWAY_API_KEYS:?missing in .env}
+      - GATEWAY_ADMIN_KEYS=${GATEWAY_ADMIN_KEYS:?missing in .env}
       - GATEWAY_RATE_LIMIT_PER_MIN=${GATEWAY_RATE_LIMIT_PER_MIN:-600}
     healthcheck:
-      # Sano si alcanza a `inference` (tenga o no champion); /health dice si hay modelo
+      # Healthy if it reaches `inference` (with or without a champion); /health tells whether a model is loaded
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8800/livez', timeout=5)"]
       interval: 30s
       timeout: 10s
@@ -237,9 +237,9 @@ services:
           cpus: "1"
           memory: 512M
 
-  # Servicio de inferencia: único dueño del modelo (gRPC). Solo en la red interna y con token.
-  # Por defecto una réplica, publicada en 127.0.0.1:50051 para los scripts locales. Para escalar,
-  # ver docker-compose.scale.yaml (sin container_name, para poder tener varias réplicas).
+  # Inference service: the only owner of the model (gRPC). Internal network only, with a token.
+  # One replica by default, published on 127.0.0.1:50051 for local scripts. To scale, see
+  # docker-compose.scale.yaml (no container_name, so there can be several replicas).
   inference:
     restart: always
     build:
@@ -260,21 +260,21 @@ services:
     networks:
       - backend
     environment:
-      # Usuario de MinIO: lee models/, escribe predictions/
+      # MinIO user: reads models/, writes predictions/
       - AWS_ACCESS_KEY_ID=inference
-      - AWS_SECRET_ACCESS_KEY=${INFERENCE_S3_SECRET:?falta en .env}
+      - AWS_SECRET_ACCESS_KEY=${INFERENCE_S3_SECRET:?missing in .env}
       - AWS_ENDPOINT_URL_S3=http://s3:9000
       - MLFLOW_S3_ENDPOINT_URL=http://s3:9000
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
-      - INFERENCE_TOKEN=${INFERENCE_TOKEN:?falta en .env}
-      # Un forward a la vez por réplica; el paralelismo viene de las réplicas
+      - INFERENCE_TOKEN=${INFERENCE_TOKEN:?missing in .env}
+      # One forward pass at a time per replica; parallelism comes from replicas
       - INFERENCE_CONCURRENCY=${INFERENCE_CONCURRENCY:-1}
       - TORCH_NUM_THREADS=${TORCH_NUM_THREADS:-4}
-    command: python -m vallavision.grpc_server
+    command: python -m billboard_detector.grpc_server
     healthcheck:
-      # Sano solo con el champion cargado (antes de correr registrar_modelo queda unhealthy)
-      test: ["CMD", "python", "-m", "vallavision.healthcheck"]
+      # Healthy only with the champion loaded (unhealthy until register_model has run)
+      test: ["CMD", "python", "-m", "billboard_detector.healthcheck"]
       interval: 30s
       timeout: 10s
       start_period: 60s
@@ -285,7 +285,7 @@ services:
           cpus: "${INFERENCE_CPUS:-4}"
           memory: 3G
 
-  # Broker de streaming (API de Kafka). Topic `frames`: clave = cámara, valor = JPEG.
+  # Streaming broker (Kafka API). Topic `frames`: key = camera, value = JPEG.
   redpanda:
     restart: always
     image: redpandadata/redpanda:v24.2.7
@@ -317,7 +317,7 @@ services:
       start_period: 20s
       retries: 5
 
-  # Consumidor: Redpanda → inference → métricas por ventana de event time → curated/stream_windows/
+  # Consumer: Redpanda → inference → event-time window metrics → curated/stream_windows/
   stream-consumer:
     restart: always
     build:
@@ -337,9 +337,9 @@ services:
     environment:
       - KAFKA_BOOTSTRAP=redpanda:9092
       - INFERENCE_ADDR=inference:50051
-      - INFERENCE_TOKEN=${INFERENCE_TOKEN:?falta en .env}
+      - INFERENCE_TOKEN=${INFERENCE_TOKEN:?missing in .env}
       - AWS_ACCESS_KEY_ID=stream
-      - AWS_SECRET_ACCESS_KEY=${STREAM_S3_SECRET:?falta en .env}
+      - AWS_SECRET_ACCESS_KEY=${STREAM_S3_SECRET:?missing in .env}
       - AWS_ENDPOINT_URL_S3=http://s3:9000
       - DATA_REPO_BUCKET_NAME=${DATA_REPO_BUCKET_NAME:-data}
       - WINDOW_MS=${STREAM_WINDOW_MS:-15000}
@@ -540,7 +540,7 @@ services:
       _AIRFLOW_DB_MIGRATE: 'true'
       _AIRFLOW_WWW_USER_CREATE: 'true'
       _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:?falta en .env}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:?missing in .env}
       _PIP_ADDITIONAL_REQUIREMENTS: ''
     user: "0:0"
 
