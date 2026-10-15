@@ -40,8 +40,10 @@ El notebook lee los secretos de `.env` y no los imprime.
 | 5 | Notebook §3 | la tabla de ataques, todo ✔ | "Los controles de seguridad, contra el sistema real." |
 | 6 | Notebook §4–5 | los vehículos publican en Redpanda; ventanas por recorrido; particiones del topic; después de noche | "El broker absorbe la diferencia entre lo que producen los vehículos y lo que infiere el modelo; las ventanas son por instante de captura." |
 | 7 | Notebook §6 → **Airflow → MinIO** | el gráfico del brillo con el tráfico recién enviado: normal sin drift, de noche con drift. Después disparar `drift_monitoring` (la tarea `alert` en rojo) y abrir la alerta en `monitoring/alerts/` | "Sin etiquetas se vigilan las condiciones de captura; el DAG lo hace cada hora y alerta a una persona." |
+| 8 | Notebook §7 → **Airflow → MLflow** | el notebook prepara un candidato (los mismos pesos con otro umbral) en `staging/`; en Airflow, `register_model` con ese `weights_source`; el notebook espera y muestra la tabla: v1 `champion`, v2 `challenger` con el motivo "Δ +0.0000 < 0.01". En MLflow, las dos versiones | "Un candidato que no mejora al champion sobre el mismo set no llega a producción, y el motivo queda escrito." |
+| 9 | Notebook §8 | se altera un archivo de los pesos del champion en MinIO y se reinicia inference: el log dice `IntegrityError` y `/health` da 503; se restaura y vuelve a servir | "El hash registrado al promover manda: un peso alterado no se sirve." |
 
-Duración: ~6 min (las esperas del DAG y de los recorridos se cortan al editar). El §4–§6 del notebook tienen que
+Duración: ~9 min (las esperas de los DAGs, de los recorridos y del reinicio se cortan al editar). El §4–§6 del notebook tienen que
 correr seguidos: el drift usa el tráfico de esos dos recorridos.
 
 ## Si algo sale mal
