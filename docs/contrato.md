@@ -11,6 +11,7 @@ cambiar sin romper a ningún consumidor. Controles de seguridad: [seguridad.md](
 | Nombre en MLflow Registry | `billboard-detector` |
 | Modelo (v1) | RT-DETR ResNet-50 fine-tuned, release [`model-v1`](https://github.com/ChristianConchari/vit-billboard-detector/releases/tag/model-v1) (PyTorch, clase única) |
 | Métricas del release | test: mAP 0.649 · AP50 0.930 · AP75 0.794 · 19.5 ms (GPU) |
+| Modelo inicial de la demo | release [`model-v0`](https://github.com/ChristianConchari/vit-billboard-detector/releases/tag/model-v0): el mismo RT-DETR entrenado con 66 imágenes (mAP 0.546 en el test del release; 0.545 en el gate). Solo para mostrar una promoción (`docs/demo.md`) |
 | Métricas del gate | `gate_map`, `gate_map_50` e IC 95 % por bootstrap, medidas por `register_model` sobre el `test` revisado (ver §5) |
 | Umbral | 0.15, calibrado sobre el `val` revisado (`calibration.json` viaja con los pesos) |
 | Aliases | `champion` (modelo servido), `challenger` (candidato que no pasó el gate), `previous` (champion saliente, para rollback) |

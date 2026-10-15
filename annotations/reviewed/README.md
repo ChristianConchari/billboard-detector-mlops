@@ -12,7 +12,7 @@ Clase única `billboard`. `val` y `test` tienen videos disjuntos (y disjuntos de
 
 No se usan las anotaciones del export original del dataset (`data/<dataset>/annotations/`) para evaluar:
 su split por video no coincide con el del entrenamiento (138 de las 169 imágenes de su `val` eran
-de `train` del modelo) y 102 de las 169 cajas de su `val` son pre-etiquetas `pending`, sin revisar.
+de `train` del modelo) y 102 de las 171 cajas de su `val` (169 imágenes) son etiquetas `pending`, sin revisar.
 
 Las imágenes son las del dataset `billboards-2025-09-14-sur-lp` (todas están en el zip). Los DAGs
 las buscan por nombre de archivo en `raw/images/<dataset>/`, sin importar el split del export en
