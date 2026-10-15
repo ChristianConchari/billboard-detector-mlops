@@ -20,7 +20,7 @@ import io
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from airflow.sdk import Param, dag, get_current_context, task
 
@@ -33,6 +33,8 @@ MODELS_PREFIX = f"models/{MODEL_NAME}"
 MLFLOW_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
 EXPERIMENT = "register_model"
 EVAL_EXPERIMENT = "evaluations"
+# Seconds without data before a GitHub download gives up (a stalled connection would hang forever)
+DOWNLOAD_TIMEOUT_SECONDS = 60
 
 
 def _s3():
@@ -113,7 +115,7 @@ def _download_github_asset(source, expected_sha256, dest):
     with tempfile.TemporaryDirectory() as tmp:
         zip_path = os.path.join(tmp, "asset.zip")
         h = hashlib.sha256()
-        with urllib.request.urlopen(url) as resp, open(zip_path, "wb") as out:
+        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as resp, open(zip_path, "wb") as out:
             for chunk in iter(lambda: resp.read(1 << 20), b""):
                 h.update(chunk)
                 out.write(chunk)
@@ -291,7 +293,7 @@ def register_model():
                 "eval_set": f"{params['eval_annotations']}@{eval_sha[:12]}",
                 "reference_key": ref_key, "n_bootstrap": int(params["n_bootstrap"])}
 
-    @task
+    @task(retries=2, retry_delay=timedelta(seconds=15))  # e.g. a stalled GitHub download (timeout above)
     def download_weights():
         """Checkpoint → models/billboard-detector/v<N>/ + metadata.json (v<N> is immutable)."""
         import tempfile
