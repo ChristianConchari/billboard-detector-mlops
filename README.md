@@ -157,7 +157,7 @@ proto/                 contrato gRPC
 annotations/reviewed/  sets con cajas revisadas: gate (test) y referencia de drift (val)
 notebooks/             demo de la presentación (notebook con el código a la vista)
 scripts/               generate_env, camera_producer, benchmark, gen_proto
-tests/                 72 tests sin el stack (corren en el CI)
+tests/                 74 tests sin el stack (corren en el CI)
 docs/                  arquitectura, contrato, seguridad, uso, demo, estado
 ```
 
